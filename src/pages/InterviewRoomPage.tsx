@@ -92,9 +92,6 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
     ttsService.unlockAudio();
     ttsService.loadVoices().then(voices => {
       setAvailableVoices(voices);
-      if (currentQuestion && settings.autoSpeakQuestions && !isPaused && !ttsService.isSpeaking()) {
-        repeatCurrentQuestion();
-      }
     });
   }, []);
 
@@ -567,9 +564,7 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
             </div>
 
             <h2 className="text-lg sm:text-xl font-bold text-white leading-relaxed">
-              {currentQuestion.question.toLowerCase().includes((currentSession.candidateName || '').toLowerCase().trim())
-                ? currentQuestion.question
-                : `${currentSession.candidateName || 'Candidate'}, ${currentQuestion.question}`}
+              {currentQuestion.question}
             </h2>
 
             {showHint && currentQuestion.contextHint && (

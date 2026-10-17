@@ -165,27 +165,29 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   }, [settings.enableSoundEffects]);
 
   // ─── Auto-speak question when question changes ──────────────────────────────
+  const lastSpokenQuestionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (currentQuestion && currentSession?.status === 'in_progress' && settings.autoSpeakQuestions && !isPaused) {
+    if (
+      currentQuestion &&
+      currentSession?.status === 'in_progress' &&
+      settings.autoSpeakQuestions &&
+      !isPaused &&
+      lastSpokenQuestionIdRef.current !== currentQuestion.id
+    ) {
+      lastSpokenQuestionIdRef.current = currentQuestion.id;
       soundService.play('question_start');
       speakQuestion(currentQuestion.question);
     }
-  }, [currentQuestion?.id, currentQuestion?.question, currentQuestionIndex, currentSession?.id, isPaused, settings.autoSpeakQuestions]);
+  }, [currentQuestion?.id, currentSession?.status, isPaused, settings.autoSpeakQuestions]);
 
   const speakQuestion = (text: string) => {
     if (!text || !text.trim()) return;
     setAiStatus('speaking');
     const targetLang = currentSession?.language || settings.language || 'en-US';
-    
-    // Ensure the candidate is addressed if text doesn't already contain name
-    let spokenText = text;
-    const name = currentSession?.candidateName?.trim();
-    if (name && !spokenText.toLowerCase().includes(name.toLowerCase())) {
-      spokenText = `${name}, ${spokenText}`;
-    }
 
     ttsService.speak(
-      spokenText,
+      text,
       {
         voiceURI: settings.voiceURI,
         pitch: settings.voicePitch,
@@ -297,9 +299,6 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         storageService.saveActiveSession(updated);
         return updated;
       });
-      if (settings.autoSpeakQuestions) {
-        speakQuestion(aiQuestion.question);
-      }
     }).catch(err => {
       console.warn('[InterviewContext] AI question for Q1 skipped, keeping role-tailored question:', err.message);
     });
