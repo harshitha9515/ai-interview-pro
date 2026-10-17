@@ -1243,10 +1243,10 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
+server.listen(PORT, () => {
   const provider = getEffectiveProvider();
   console.log(`\n🤖 AI Interview Pro — Backend AI Service`);
-  console.log(`📡 Running on http://${HOST}:${PORT}`);
+  console.log(`📡 Running on port ${PORT} (dual-stack: http://127.0.0.1:${PORT} & http://localhost:${PORT})`);
   console.log(`🧠 AI Provider: ${provider === 'fallback' ? '⚠️  FALLBACK (curated bank) — add API key to .env' : `✅ ${provider.toUpperCase()} (${provider === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL})`}`);
   console.log(`\nEndpoints:`);
   console.log(`  GET  /api/ai-status`);

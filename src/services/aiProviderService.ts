@@ -381,26 +381,29 @@ class AIProviderService {
 
   // Upload and parse resume
   async uploadResume(params: UploadResumeParams): Promise<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }> {
-    if (this.serverAvailable !== false) {
-      try {
-        const resp = await apiFetch<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }>('/upload-resume', {
-          method: 'POST',
-          body: JSON.stringify(params)
-        });
-        this.serverAvailable = true;
-        if (resp.resumeData) {
-          return {
-            resumeData: resp.resumeData,
-            warnings: resp.warnings || [],
-            source: resp.source || 'server'
-          };
-        }
-      } catch (err: any) {
-        console.warn('[AIProviderService] uploadResume server error:', err.message);
+    try {
+      const resp = await apiFetch<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }>('/upload-resume', {
+        method: 'POST',
+        body: JSON.stringify(params)
+      });
+      this.serverAvailable = true;
+      if (resp.resumeData) {
+        return {
+          resumeData: resp.resumeData,
+          warnings: resp.warnings || [],
+          source: resp.source || 'server'
+        };
+      }
+      throw new Error('Invalid resume parsing response from server.');
+    } catch (err: any) {
+      console.warn('[AIProviderService] uploadResume server error:', err.message);
+      // If server returned an HTTP error (e.g. 400 Bad Request, file format, size), surface that exact message
+      if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError') && !err.message.includes('503')) {
         throw err;
       }
+      this.serverAvailable = false;
+      throw new Error('AI backend server is not reachable to parse this resume document. Please start the server using npm run server.');
     }
-    throw new Error('AI backend server is not reachable to parse this resume document. Please start the server using npm run server.');
   }
 
   // Analyze Job Description against Resume
