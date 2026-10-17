@@ -77,6 +77,7 @@ interface InterviewContextType {
   restartInterviewWithSession: (session: InterviewSession) => string;
   setSessionLanguage: (lang: string) => void;
   refreshAIStatus: () => Promise<void>;
+  clearActiveSetup: () => void;
 }
 
 const InterviewContext = createContext<InterviewContextType | undefined>(undefined);
@@ -300,6 +301,9 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     const candidateName = params.candidateName?.trim() || 'Candidate';
     const effectiveResumeData = params.resumeData !== undefined ? params.resumeData : resumeData;
+    if (!effectiveResumeData) {
+      throw new Error('A valid resume must be uploaded before starting the interview.');
+    }
     const effectiveJD = params.jobDescriptionText !== undefined ? params.jobDescriptionText : jobDescriptionText;
     const effectiveJobMatch = params.jobMatchAnalysis !== undefined ? params.jobMatchAnalysis : jobMatchAnalysis;
     const effectiveFocus = params.interviewFocus || interviewFocus;
@@ -338,7 +342,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       jobDescriptionText: effectiveJD || undefined,
       jobMatchAnalysis: effectiveJobMatch || undefined,
       interviewFocus: effectiveFocus,
-      isProctored: params.isProctored ?? false
+      isProctored: true // Mandatory Proctored Placement Mode
     };
 
     setCurrentSession(newSession);
@@ -691,6 +695,18 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     storageService.saveSession(updatedSession);
   };
 
+  const clearActiveSetup = () => {
+    setResumeData(null);
+    setJobDescriptionText('');
+    setJobMatchAnalysis(null);
+    setInterviewFocus('balanced');
+    setCurrentSession(null);
+    setCurrentQuestionIndex(0);
+    questionHistoryRef.current = [];
+    storageService.clearActiveSession();
+    storageService.clearSetupPreferences();
+  };
+
   return (
     <InterviewContext.Provider value={{
       currentSession,
@@ -722,7 +738,8 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       endInterview,
       restartInterviewWithSession,
       setSessionLanguage,
-      refreshAIStatus
+      refreshAIStatus,
+      clearActiveSetup
     }}>
       {children}
     </InterviewContext.Provider>

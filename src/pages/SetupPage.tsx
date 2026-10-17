@@ -21,7 +21,8 @@ import {
   ShieldAlert,
   Eye,
   Camera,
-  Loader2 
+  Loader2,
+  FileText
 } from 'lucide-react';
 import { 
   InterviewType, 
@@ -42,6 +43,7 @@ import { sttService } from '../services/speechRecognition';
 import { ttsService } from '../services/speechSynthesis';
 import { storageService } from '../services/storage';
 import { ResumeUploadAndAnalysis } from '../components/resume/ResumeUploadAndAnalysis';
+import { validateSetupPreferences } from '../services/interviewValidation';
 
 interface SetupPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -58,25 +60,34 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
     jobMatchAnalysis, 
     setJobMatchAnalysis, 
     interviewFocus, 
-    setInterviewFocus 
+    setInterviewFocus,
+    clearActiveSetup
   } = useInterview();
   const { settings, updateSettings } = useSettings();
 
-  // Form states loaded from persisted preferences
-  const savedPrefs = storageService.getSetupPreferences();
-  const [candidateName, setCandidateName] = useState<string>(savedPrefs.candidateName || '');
-  const [selectedType, setSelectedType] = useState<InterviewType>(initialType || savedPrefs.type || 'placement_mixed');
-  const [targetRole, setTargetRole] = useState<string>(savedPrefs.role || 'Campus Placement Fresher (All Disciplines)');
-  const [customRoleInput, setCustomRoleInput] = useState<string>(savedPrefs.customRoleInput || '');
-  const [isCustomRole, setIsCustomRole] = useState<boolean>(savedPrefs.isCustomRole || false);
-  const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>(savedPrefs.experienceLevel || 'fresher');
-  const [selectedLanguage, setSelectedLanguage] = useState<string>(savedPrefs.language || settings.language || 'en-IN');
-  const [difficulty, setDifficulty] = useState<QuestionDifficulty>(savedPrefs.difficulty || 'intermediate');
-  const [questionCount, setQuestionCount] = useState<number>(savedPrefs.questionCount || 5);
-  const [interviewMode, setInterviewMode] = useState<InterviewMode>(savedPrefs.mode || 'voice');
-  const [durationMinutes, setDurationMinutes] = useState<number>(savedPrefs.durationMinutes || 15);
+  // Fresh setup: All preferences initialized as UNSELECTED per Requirement 4 & 7
+  const [candidateName, setCandidateName] = useState<string>('');
+  const [selectedType, setSelectedType] = useState<InterviewType | null>(initialType || null);
+  const [targetRole, setTargetRole] = useState<string>('');
+  const [customRoleInput, setCustomRoleInput] = useState<string>('');
+  const [isCustomRole, setIsCustomRole] = useState<boolean>(false);
+  const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
+  const [difficulty, setDifficulty] = useState<QuestionDifficulty | null>(null);
+  const [questionCount, setQuestionCount] = useState<number | null>(null);
+  const [interviewMode, setInterviewMode] = useState<InterviewMode | null>(null);
+  const [durationMinutes, setDurationMinutes] = useState<number | null>(null);
   const [isStarting, setIsStarting] = useState<boolean>(false);
-  const [proctoredMode, setProctoredMode] = useState<boolean>(savedPrefs.proctoredMode ?? true);
+
+  // Proctored mode is permanently required - no toggle
+  const proctoredMode = true;
+
+  // Reset any stale session context on initial mount of a new setup
+  useEffect(() => {
+    clearActiveSetup();
+    // Do not load stale resume from disk
+    setResumeData(null);
+  }, []);
 
   // Voice & Language capability states
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -87,18 +98,17 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [micTesting, setMicTesting] = useState<boolean>(false);
   const [micTranscript, setMicTranscript] = useState<string>('');
-  const [micStatus, setMicStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
   // Load voices on mount
   useEffect(() => {
     ttsService.loadVoices().then(v => setAvailableVoices(v));
   }, []);
 
-  const currentLangConfig = getLanguageConfig(selectedLanguage);
-  const voiceCheck = checkVoiceSupport(selectedLanguage, availableVoices);
-  const sttCheck = checkSTTSupport(selectedLanguage);
+  const currentLangConfig = selectedLanguage ? getLanguageConfig(selectedLanguage) : null;
+  const voiceCheck = selectedLanguage ? checkVoiceSupport(selectedLanguage, availableVoices) : { supported: false, matchingVoices: [], message: '' };
 
   const handleRoleSelection = (role: string) => {
+    if (errorMessage) setErrorMessage(null);
     if (role === 'custom') {
       setIsCustomRole(true);
       setTargetRole(customRoleInput || '');
@@ -109,6 +119,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
   };
 
   const testMicrophone = () => {
+    if (!currentLangConfig) return;
     if (micTesting) {
       sttService.stop();
       setMicTesting(false);
@@ -116,21 +127,18 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
     }
 
     setMicTesting(true);
-    setMicTranscript(`Listening in ${currentLangConfig.name}... Speak a phrase (e.g. "${currentLangConfig.sampleText.slice(0, 35)}...")`);
-    setMicStatus('idle');
+    setMicTranscript(`Listening in ${currentLangConfig.name}... Speak a test phrase.`);
 
     sttService.start(
       {
         onStart: () => setMicTesting(true),
         onFinal: (text) => {
           setMicTranscript(`✓ Captured: "${text}"`);
-          setMicStatus('success');
           setMicTesting(false);
           sttService.stop();
         },
         onError: (err) => {
           setMicTranscript(`✕ ${err}`);
-          setMicStatus('error');
           setMicTesting(false);
         },
         onEnd: () => {
@@ -142,6 +150,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
   };
 
   const testVoice = () => {
+    if (!currentLangConfig) return;
     if (testingVoice) {
       ttsService.cancel();
       setTestingVoice(false);
@@ -165,35 +174,34 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isStarting) return; // Prevent duplicate submissions
+    if (isStarting) return;
 
     setErrorMessage(null);
 
+    // Strict Centralized Validation
+    const validation = validateSetupPreferences({
+      resumeData,
+      candidateName,
+      category: selectedType,
+      role: targetRole,
+      isCustomRole,
+      customRoleInput,
+      experienceLevel,
+      mode: interviewMode,
+      difficulty,
+      questionCount,
+      durationMinutes,
+      language: selectedLanguage
+    });
+
+    if (!validation.isValid) {
+      setErrorMessage(validation.missingField || 'Please complete all required fields.');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
     const trimmedName = candidateName.trim();
-    if (!trimmedName) {
-      setErrorMessage('Please enter your full name before beginning the interview. The interviewer requires your name to conduct the session.');
-      return;
-    }
-    if (trimmedName.length < 2) {
-      setErrorMessage('Please enter a valid candidate name (at least 2 characters).');
-      return;
-    }
-
     const effectiveRole = isCustomRole ? customRoleInput.trim() : targetRole.trim();
-    if (!effectiveRole) {
-      setErrorMessage('Please specify your target job role or select one from the list.');
-      return;
-    }
-
-    if (questionCount < 1 || questionCount > 20) {
-      setErrorMessage('Question count must be between 1 and 20.');
-      return;
-    }
-
-    if (durationMinutes < 5 || durationMinutes > 60) {
-      setErrorMessage('Duration must be between 5 and 60 minutes.');
-      return;
-    }
 
     // Persist setup preferences
     storageService.saveSetupPreferences({
@@ -203,15 +211,15 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
       isCustomRole,
       customRoleInput,
       experienceLevel,
-      language: selectedLanguage,
-      difficulty,
-      questionCount,
-      mode: interviewMode,
-      durationMinutes,
-      proctoredMode
+      language: selectedLanguage!,
+      difficulty: difficulty!,
+      questionCount: questionCount!,
+      mode: interviewMode!,
+      durationMinutes: durationMinutes!,
+      proctoredMode: true
     });
 
-    if (selectedLanguage !== settings.language) {
+    if (selectedLanguage && selectedLanguage !== settings.language) {
       updateSettings({ language: selectedLanguage });
     }
 
@@ -219,22 +227,22 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
     try {
       const sessionId = startInterview({
         candidateName: trimmedName,
-        type: selectedType,
+        type: selectedType!,
         role: effectiveRole,
-        experienceLevel,
-        language: selectedLanguage,
-        difficulty,
-        mode: interviewMode,
-        questionCount,
-        durationMinutes,
+        experienceLevel: experienceLevel!,
+        language: selectedLanguage!,
+        difficulty: difficulty!,
+        mode: interviewMode!,
+        questionCount: questionCount!,
+        durationMinutes: durationMinutes!,
         resumeData,
         jobDescriptionText,
         jobMatchAnalysis,
         interviewFocus,
-        isProctored: proctoredMode
+        isProctored: true // Mandatory proctored mode
       });
 
-      onNavigate('room', { sessionId, proctoredMode: proctoredMode ? 'true' : 'false' });
+      onNavigate('room', { sessionId, proctoredMode: 'true' });
     } catch (err: any) {
       setIsStarting(false);
       setErrorMessage(`Failed to start interview: ${err.message || 'Unknown error'}`);
@@ -242,10 +250,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
   };
 
   const experienceOptions: { id: ExperienceLevel; label: string; desc: string }[] = [
-    { id: 'fresher', label: 'College / Fresher', desc: '0 - 1 year of experience' },
-    { id: 'junior', label: 'Junior Engineer', desc: '1 - 2 years in industry' },
-    { id: 'mid', label: 'Mid-Level', desc: '3 - 5 years professional' },
-    { id: 'senior', label: 'Senior / Lead', desc: '5+ years architecture' }
+    { id: 'fresher', label: 'College / Fresher', desc: '0–1 year of experience' },
+    { id: 'junior', label: 'Junior Engineer', desc: '1–2 years in industry' },
+    { id: 'mid', label: 'Mid-Level', desc: '3–5 years professional experience' },
+    { id: 'senior', label: 'Senior / Lead', desc: '5+ years architecture and leadership experience' }
   ];
 
   return (
@@ -254,23 +262,47 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
       {/* Header */}
       <div className="text-center max-w-2xl mx-auto mb-10 space-y-2">
         <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">
-          Interview Configuration
+          Interview Configuration & Proctoring Verification
         </span>
         <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-          Setup Your AI Mock Interview
+          Setup Your AI Placement Interview
         </h1>
         <p className="text-xs sm:text-sm text-slate-300">
-          Tailor the simulation parameters to match your upcoming placement drive or campus assessment.
+          All configuration fields and your resume upload must be explicitly chosen to personalize your assessment.
         </p>
       </div>
 
       <form onSubmit={handleStart} className="space-y-8">
+
+        {/* Global Error Banner */}
+        {errorMessage && (
+          <div className="p-4 rounded-2xl bg-rose-950/90 border border-rose-500/60 text-rose-300 text-xs flex items-center gap-2.5 shadow-xl shadow-rose-950/50 animate-shake">
+            <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-400" />
+            <span className="font-semibold">{errorMessage}</span>
+          </div>
+        )}
         
-        {/* Dedicated Resume Upload & Analysis Section (Feature 1, 2, 3) */}
-        <div className="glass-card rounded-2xl p-6 border border-cyan-500/30 bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-cyan-950/20 shadow-xl shadow-cyan-950/20">
+        {/* Step 1: Upload Resume & Candidate Profile */}
+        <div className="glass-card rounded-2xl p-6 border border-cyan-500/30 bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-cyan-950/20 shadow-xl shadow-cyan-950/20 space-y-6">
+          <div className="flex items-center gap-2">
+            <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">1</span>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <span>Upload Resume & Candidate Identity</span>
+              <span className="text-[10px] font-bold text-rose-400 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/50 uppercase tracking-wider">
+                Required
+              </span>
+            </h2>
+          </div>
+
           <ResumeUploadAndAnalysis
             resumeData={resumeData}
-            onResumeChange={setResumeData}
+            onResumeChange={(data) => {
+              setResumeData(data);
+              if (data?.candidateName && (!candidateName || candidateName === 'Candidate')) {
+                setCandidateName(data.candidateName);
+              }
+              if (errorMessage) setErrorMessage(null);
+            }}
             jobDescriptionText={jobDescriptionText}
             onJobDescriptionChange={setJobDescriptionText}
             jobMatchAnalysis={jobMatchAnalysis}
@@ -284,60 +316,55 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
             }}
             targetRole={isCustomRole ? customRoleInput : targetRole}
           />
+
+          {/* Candidate Name Input */}
+          <div className="pt-4 border-t border-slate-800/80 space-y-2">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Candidate Full Name</span>
+                <span className="text-rose-400">*</span>
+              </label>
+              {candidateName.trim().length >= 2 && (
+                <span className="text-[11px] font-medium text-emerald-400 flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  Interviewer will address you as {candidateName.trim()}
+                </span>
+              )}
+            </div>
+
+            <div className="relative">
+              <input
+                id="candidate-name-input"
+                type="text"
+                value={candidateName}
+                onChange={(e) => {
+                  setCandidateName(e.target.value);
+                  if (errorMessage) setErrorMessage(null);
+                }}
+                placeholder="Enter your full candidate name (e.g., Alex Johnson)"
+                required
+                className="w-full px-4 py-3 rounded-xl bg-slate-900/90 border border-slate-700 text-white text-xs font-semibold focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20 transition-all placeholder:text-slate-500"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* Step 1: Mandatory Candidate Identification */}
-        <div className="glass-card rounded-2xl p-6 border border-cyan-500/40 bg-gradient-to-br from-cyan-950/20 via-slate-900/70 to-transparent space-y-4 shadow-xl shadow-cyan-950/20">
-          <div className="flex items-center justify-between flex-wrap gap-2">
+        {/* Step 2: Select Interview Category */}
+        <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">1</span>
+              <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">2</span>
               <h2 className="text-base font-bold text-white flex items-center gap-2">
-                <span>Candidate Full Name</span>
+                <span>Select Interview Category</span>
                 <span className="text-[10px] font-bold text-rose-400 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/50 uppercase tracking-wider">
                   Required
                 </span>
               </h2>
             </div>
-            {candidateName.trim().length >= 2 && (
-              <span className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 bg-emerald-950/70 px-3 py-1 rounded-full border border-emerald-800/50">
-                <Check className="w-3.5 h-3.5" />
-                <span>Interviewer will address you as {candidateName.trim()}</span>
-              </span>
+            {!selectedType && (
+              <span className="text-xs text-amber-400 font-medium">Select an option</span>
             )}
-          </div>
-
-          <p className="text-xs text-slate-300 leading-relaxed">
-            Please enter your name manually. The interviewer will address you directly by your name in every question asked during the interview.
-          </p>
-
-          <div className="relative">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <User className="w-4 h-4 text-cyan-400" />
-            </div>
-            <input
-              id="candidate-name-input"
-              type="text"
-              value={candidateName}
-              onChange={(e) => {
-                setCandidateName(e.target.value);
-                if (errorMessage) setErrorMessage(null);
-              }}
-              placeholder="e.g. Alex Johnson (Enter your full name)"
-              required
-              className={`w-full pl-10 pr-4 py-3.5 rounded-xl bg-slate-900/90 border text-white text-sm font-semibold focus:outline-none transition-all placeholder:text-slate-500 ${
-                !candidateName.trim() && errorMessage
-                  ? 'border-rose-500 focus:border-rose-400 focus:ring-1 focus:ring-rose-500'
-                  : 'border-slate-700/80 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/20'
-              }`}
-            />
-          </div>
-        </div>
-
-        {/* Step 2: Select Track / Category */}
-        <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-lg bg-cyan-500/20 text-cyan-400 font-bold text-xs flex items-center justify-center">2</span>
-            <h2 className="text-base font-bold text-white">Select Interview Category</h2>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -346,10 +373,13 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
               return (
                 <div
                   key={cat.id}
-                  onClick={() => setSelectedType(cat.id)}
+                  onClick={() => {
+                    setSelectedType(cat.id);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
                   className={`p-4 rounded-xl border cursor-pointer transition-all ${
                     isSelected
-                      ? 'bg-slate-800/90 border-cyan-400 shadow-md shadow-cyan-500/10'
+                      ? 'bg-slate-800/90 border-cyan-400 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400'
                       : 'bg-slate-900/40 border-slate-800 hover:border-slate-700 hover:bg-slate-850'
                   }`}
                 >
@@ -367,27 +397,38 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
           </div>
         </div>
 
-        {/* Step 2: Target Role & Experience */}
+        {/* Step 3: Target Role and Experience */}
         <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-6">
           <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-lg bg-violet-500/20 text-violet-400 font-bold text-xs flex items-center justify-center">2</span>
-            <h2 className="text-base font-bold text-white">Target Role & Experience</h2>
+            <span className="w-6 h-6 rounded-lg bg-violet-500/20 text-violet-400 font-bold text-xs flex items-center justify-center">3</span>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <span>Target Role and Experience</span>
+              <span className="text-[10px] font-bold text-rose-400 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/50 uppercase tracking-wider">
+                Required
+              </span>
+            </h2>
           </div>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Target Role
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Target Role
+                </label>
+                {!targetRole && (
+                  <span className="text-xs text-amber-400 font-medium">Select an option</span>
+                )}
+              </div>
+              
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
                 {TARGET_ROLES.map(role => (
                   <button
                     type="button"
                     key={role}
                     onClick={() => handleRoleSelection(role)}
-                    className={`px-3 py-2.5 rounded-xl text-left text-xs font-medium border transition-all ${
+                    className={`px-3 py-2.5 rounded-xl text-left text-xs font-medium border transition-all cursor-pointer ${
                       !isCustomRole && targetRole === role
-                        ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200'
+                        ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 ring-1 ring-cyan-400'
                         : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:border-slate-700'
                     }`}
                   >
@@ -396,13 +437,15 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
                 ))}
               </div>
 
-              {/* Custom Role Option */}
+              {/* Specify Custom Role Option */}
               <div className="pt-2">
                 <button
                   type="button"
                   onClick={() => handleRoleSelection('custom')}
-                  className={`text-xs font-medium px-3 py-1.5 rounded-lg border mb-2 ${
-                    isCustomRole ? 'bg-cyan-950 border-cyan-400 text-cyan-300' : 'bg-slate-900 border-slate-800 text-slate-400'
+                  className={`text-xs font-medium px-3 py-1.5 rounded-lg border mb-2 cursor-pointer transition-all ${
+                    isCustomRole 
+                      ? 'bg-cyan-950 border-cyan-400 text-cyan-300 ring-1 ring-cyan-400' 
+                      : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
                   + Specify Custom Role
@@ -414,9 +457,10 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
                     onChange={(e) => {
                       setCustomRoleInput(e.target.value);
                       setTargetRole(e.target.value);
+                      if (errorMessage) setErrorMessage(null);
                     }}
                     placeholder="e.g. AI Research Intern, Site Reliability Engineer, Cyber Security Analyst"
-                    className="w-full glass-input px-4 py-2.5 rounded-xl text-xs"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-900 border border-cyan-500/50 text-white text-xs focus:outline-none focus:border-cyan-400"
                     autoFocus
                   />
                 )}
@@ -425,9 +469,15 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
 
             {/* Experience Level */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Experience Level
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Experience Level
+                </label>
+                {!experienceLevel && (
+                  <span className="text-xs text-amber-400 font-medium">Select an option</span>
+                )}
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2.5">
                 {experienceOptions.map(opt => {
                   const isSelected = experienceLevel === opt.id;
@@ -435,10 +485,13 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
                     <button
                       type="button"
                       key={opt.id}
-                      onClick={() => setExperienceLevel(opt.id)}
-                      className={`p-3 rounded-xl border text-left transition-all ${
+                      onClick={() => {
+                        setExperienceLevel(opt.id);
+                        if (errorMessage) setErrorMessage(null);
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-slate-800 border-violet-400 text-violet-200'
+                          ? 'bg-slate-800 border-violet-400 text-violet-200 ring-1 ring-violet-400'
                           : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                       }`}
                     >
@@ -453,41 +506,58 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
           </div>
         </div>
 
-        {/* Step 3: Difficulty, Duration, Questions & Mode */}
+        {/* Step 4: Configure Interview Mechanics */}
         <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-6">
           <div className="flex items-center gap-2">
-            <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 font-bold text-xs flex items-center justify-center">3</span>
-            <h2 className="text-base font-bold text-white">Interview Mechanics</h2>
+            <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 font-bold text-xs flex items-center justify-center">4</span>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <span>Configure Interview Mechanics</span>
+              <span className="text-[10px] font-bold text-rose-400 bg-rose-950/80 px-2 py-0.5 rounded-full border border-rose-800/50 uppercase tracking-wider">
+                Required
+              </span>
+            </h2>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
             
-            {/* Mode selection */}
+            {/* Interview Input Mode */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Interview Input Mode
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Interview Input Mode
+                </label>
+                {!interviewMode && (
+                  <span className="text-xs text-amber-400 font-medium">Select mode</span>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setInterviewMode('voice')}
-                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-1.5 ${
+                  onClick={() => {
+                    setInterviewMode('voice');
+                    if (errorMessage) setErrorMessage(null);
+                  }}
+                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-1.5 cursor-pointer ${
                     interviewMode === 'voice'
-                      ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10'
+                      ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400'
                       : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
                   <Mic className="w-5 h-5 text-cyan-400" />
                   <span className="text-xs font-bold text-white">Voice & Speech</span>
-                  <span className="text-[10px] text-slate-400">Microphone speech input</span>
+                  <span className="text-[10px] text-slate-400">Microphone-based spoken answers</span>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setInterviewMode('text')}
-                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-1.5 ${
+                  onClick={() => {
+                    setInterviewMode('text');
+                    if (errorMessage) setErrorMessage(null);
+                  }}
+                  className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-1.5 cursor-pointer ${
                     interviewMode === 'text'
-                      ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/10'
+                      ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400'
                       : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
@@ -496,22 +566,35 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
                   <span className="text-[10px] text-slate-400">Type responses directly</span>
                 </button>
               </div>
+
+              <p className="text-[10px] text-slate-500 mt-2">
+                Note: In both modes, camera and microphone access are required for proctored identity and environment monitoring.
+              </p>
             </div>
 
             {/* Question Difficulty */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Question Difficulty
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Question Difficulty
+                </label>
+                {!difficulty && (
+                  <span className="text-xs text-amber-400 font-medium">Select difficulty</span>
+                )}
+              </div>
+
               <div className="grid grid-cols-3 gap-2">
                 {(['beginner', 'intermediate', 'advanced'] as QuestionDifficulty[]).map(d => (
                   <button
                     type="button"
                     key={d}
-                    onClick={() => setDifficulty(d)}
-                    className={`py-3 px-2 rounded-xl border text-center capitalize text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setDifficulty(d);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    className={`py-3 px-2 rounded-xl border text-center capitalize text-xs font-bold transition-all cursor-pointer ${
                       difficulty === d
-                        ? 'bg-slate-800 border-cyan-400 text-cyan-300'
+                        ? 'bg-slate-800 border-cyan-400 text-cyan-300 ring-1 ring-cyan-400'
                         : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
@@ -521,20 +604,29 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
               </div>
             </div>
 
-            {/* Question Count */}
+            {/* Number of Questions */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Number of Questions
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Number of Questions
+                </label>
+                {!questionCount && (
+                  <span className="text-xs text-amber-400 font-medium">Select count</span>
+                )}
+              </div>
+
               <div className="grid grid-cols-4 gap-2">
                 {[3, 5, 8, 10].map(count => (
                   <button
                     type="button"
                     key={count}
-                    onClick={() => setQuestionCount(count)}
-                    className={`py-2.5 rounded-xl border text-center text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setQuestionCount(count);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    className={`py-2.5 rounded-xl border text-center text-xs font-bold transition-all cursor-pointer ${
                       questionCount === count
-                        ? 'bg-slate-800 border-cyan-400 text-cyan-300'
+                        ? 'bg-slate-800 border-cyan-400 text-cyan-300 ring-1 ring-cyan-400'
                         : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
@@ -544,20 +636,29 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
               </div>
             </div>
 
-            {/* Duration */}
+            {/* Session Duration */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-2">
-                Session Duration
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-semibold text-slate-300">
+                  Session Duration
+                </label>
+                {!durationMinutes && (
+                  <span className="text-xs text-amber-400 font-medium">Select duration</span>
+                )}
+              </div>
+
               <div className="grid grid-cols-4 gap-2">
                 {[10, 15, 20, 30].map(mins => (
                   <button
                     type="button"
                     key={mins}
-                    onClick={() => setDurationMinutes(mins)}
-                    className={`py-2.5 rounded-xl border text-center text-xs font-bold transition-all ${
+                    onClick={() => {
+                      setDurationMinutes(mins);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    className={`py-2.5 rounded-xl border text-center text-xs font-bold transition-all cursor-pointer ${
                       durationMinutes === mins
-                        ? 'bg-slate-800 border-cyan-400 text-cyan-300'
+                        ? 'bg-slate-800 border-cyan-400 text-cyan-300 ring-1 ring-cyan-400'
                         : 'bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700'
                     }`}
                   >
@@ -567,36 +668,40 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
               </div>
             </div>
 
-            {/* Multilingual Interview Language Selection */}
+            {/* Target Interview Language */}
             <div className="sm:col-span-2 space-y-3">
               <div className="flex items-center justify-between">
                 <label className="block text-xs font-semibold text-slate-300">
                   Target Interview Language
                 </label>
-                <span className="text-[11px] text-cyan-400 font-medium">
-                  {currentLangConfig.name} ({currentLangConfig.nativeName})
-                </span>
+                {!selectedLanguage ? (
+                  <span className="text-xs text-amber-400 font-medium">Select language</span>
+                ) : (
+                  <span className="text-[11px] text-cyan-400 font-medium">
+                    {currentLangConfig?.name} ({currentLangConfig?.nativeName})
+                  </span>
+                )}
               </div>
 
               {/* 6 Supported Language Cards */}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 {SUPPORTED_LANGUAGES.map(lang => {
-                  const isSelected = currentLangConfig.id === lang.id;
+                  const isSelected = selectedLanguage === lang.code;
                   return (
                     <button
                       type="button"
                       key={lang.id}
                       onClick={() => {
                         setSelectedLanguage(lang.code);
-                        // Auto-assign first matching voice for new language if available
+                        if (errorMessage) setErrorMessage(null);
                         const matching = checkVoiceSupport(lang.code, availableVoices);
                         if (matching.supported && matching.preferredVoice) {
                           setSelectedVoiceURI(matching.preferredVoice.voiceURI);
                         }
                       }}
-                      className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden group ${
+                      className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden group cursor-pointer ${
                         isSelected
-                          ? 'bg-cyan-950/70 border-cyan-400 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                          ? 'bg-cyan-950/70 border-cyan-400 text-cyan-300 shadow-lg shadow-cyan-500/20 ring-1 ring-cyan-400'
                           : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-white'
                       }`}
                     >
@@ -617,196 +722,107 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
                 })}
               </div>
 
-              {/* Language Voice & STT Capability Card */}
-              <div className="p-3.5 rounded-2xl bg-navy-950/90 border border-slate-800 space-y-3">
-                
-                {/* Voice Status & Selection */}
-                {voiceCheck.supported ? (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Native Voice Available ({voiceCheck.matchingVoices.length} voice{voiceCheck.matchingVoices.length > 1 ? 's' : ''})</span>
-                      </span>
-                      <button
-                        type="button"
-                        onClick={testVoice}
-                        className={`text-xs px-3 py-1 rounded-lg font-semibold border flex items-center gap-1.5 transition-all ${
-                          testingVoice
-                            ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
-                            : 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/25'
-                        }`}
-                      >
-                        <Volume2 className="w-3.5 h-3.5" />
-                        <span>{testingVoice ? 'Playing...' : 'Test Voice Audio'}</span>
-                      </button>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <label className="text-[11px] text-slate-400 whitespace-nowrap">Voice:</label>
-                      <select
-                        value={selectedVoiceURI}
-                        onChange={(e) => setSelectedVoiceURI(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
-                      >
-                        {voiceCheck.matchingVoices.map(v => (
-                          <option key={v.voiceURI} value={v.voiceURI}>
-                            {v.name} ({v.lang})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+              {/* Audio and Voice Test (visible once language is chosen) */}
+              {selectedLanguage && currentLangConfig && (
+                <div className="p-3.5 rounded-2xl bg-navy-950/90 border border-slate-800 space-y-3 mt-3 animate-fadeIn">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{currentLangConfig.name} Selected ({voiceCheck.matchingVoices.length} voice{voiceCheck.matchingVoices.length > 1 ? 's' : ''} available)</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={testVoice}
+                      className="text-xs px-3 py-1 rounded-lg font-semibold border flex items-center gap-1.5 bg-cyan-500/15 text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/25 transition-all cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>{testingVoice ? 'Playing Sample...' : 'Test Speech Audio'}</span>
+                    </button>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="flex items-start gap-2 text-xs text-amber-300">
-                      <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
-                      <div>
-                        <span className="font-semibold">Text & Visual Mode: </span>
-                        <span>{voiceCheck.message}</span>
-                      </div>
-                    </div>
-                    <p className="text-[11px] text-slate-400 leading-relaxed pl-6">
-                      Questions will be presented in authentic {currentLangConfig.nativeName} ({currentLangConfig.name}) script on screen. You can answer using microphone voice recognition or typing.
-                    </p>
-                  </div>
-                )}
 
-                {/* Multilingual evaluation reminder */}
-                <div className="pt-2 border-t border-slate-800/80 text-[11px] text-slate-400 flex items-center gap-2">
-                  <ShieldCheck className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span>
-                    <strong>Fair Evaluation:</strong> Evaluated for semantic meaning and technical depth. Mixed English technical terms and regional accents are fully credited without penalty.
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] text-slate-400 whitespace-nowrap">Voice:</label>
+                    <select
+                      value={selectedVoiceURI}
+                      onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
+                    >
+                      {voiceCheck.matchingVoices.map(v => (
+                        <option key={v.voiceURI} value={v.voiceURI}>
+                          {v.name} ({v.lang})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-
-              </div>
+              )}
             </div>
 
           </div>
-
-          {/* Quick Microphone Check Widget */}
-          <div className="pt-4 border-t border-slate-800/80">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-navy-950/80 p-4 rounded-xl border border-slate-800">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Volume2 className="w-4 h-4 text-cyan-400" />
-                  <span className="text-xs font-bold text-white">Microphone Quick Test</span>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Verify your browser speech recognition before entering the interview room.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={testMicrophone}
-                className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-all ${
-                  micTesting 
-                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse' 
-                    : 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/40 hover:bg-cyan-500/25'
-                }`}
-              >
-                <Mic className="w-3.5 h-3.5" />
-                <span>{micTesting ? 'Stop Speaking' : 'Test Microphone'}</span>
-              </button>
-            </div>
-
-            {micTranscript && (
-              <div className="mt-2 text-xs p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 font-mono">
-                {micTranscript}
-              </div>
-            )}
-          </div>
-
         </div>
 
-        {/* Proctored Interview Mode (Default ON) */}
-        <div className="glass-card rounded-2xl p-6 border border-emerald-500/30 bg-gradient-to-br from-emerald-950/20 via-slate-900/70 to-transparent space-y-4">
-          <div className="flex items-center justify-between">
+        {/* Step 5: Proctored Placement Mode: Required (Permanently Enabled, No Toggle) */}
+        <div className="glass-card rounded-2xl p-6 border border-emerald-500/40 bg-gradient-to-br from-emerald-950/25 via-slate-900/80 to-transparent space-y-4 shadow-xl shadow-emerald-950/20">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+              <div className="w-10 h-10 rounded-xl bg-emerald-950/90 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
                 <ShieldCheck className="w-5 h-5" />
               </div>
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  Proctored Placement Mode
-                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                    DEFAULT ON
+                  Proctored Placement Mode: Required
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 font-bold uppercase tracking-wider">
+                    Mandatory
                   </span>
                 </h3>
-                <p className="text-[11px] text-slate-400">Company placement standard: verified camera & microphone device check, rules consent, and tab-switch telemetry</p>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Camera and microphone verification, interview rules acknowledgement, and browser activity monitoring are required before the interview starts.
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-emerald-400 bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-500/30 hidden sm:inline-flex items-center gap-1.5">
-                <CheckCircle className="w-3.5 h-3.5" />
-                Active
+              <span className="text-xs font-bold text-emerald-400 bg-emerald-950/90 px-3 py-1.5 rounded-full border border-emerald-500/40 flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                Always Enforced
               </span>
-              <button
-                type="button"
-                onClick={() => setProctoredMode(p => !p)}
-                className={`relative w-12 h-6 rounded-full transition-all duration-300 ${
-                  proctoredMode
-                    ? 'bg-emerald-500 shadow-lg shadow-emerald-500/30'
-                    : 'bg-slate-700'
-                }`}
-                title="Proctored Assessment Mode Toggle"
-              >
-                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-300 ${
-                  proctoredMode ? 'translate-x-6' : ''
-                }`} />
-              </button>
             </div>
           </div>
 
-          {proctoredMode && (
-            <div className="space-y-3 animate-fadeIn">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
-                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
-                  <span className="text-slate-300">Tab-switch detection</span>
-                </div>
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
-                  <Camera className="w-3.5 h-3.5 text-violet-400" />
-                  <span className="text-slate-300">Camera monitoring</span>
-                </div>
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
-                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="text-slate-300">Mic status tracking</span>
-                </div>
-              </div>
-              <p className="text-[10px] text-slate-500 leading-relaxed">
-                When enabled, you'll see a rules & consent screen, a camera/mic device check, and optional fullscreen mode before the interview begins.
-                No video or audio is recorded. Tab-switch events are logged with warnings.
-              </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2">
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900/70 border border-slate-800 text-xs">
+              <Eye className="w-4 h-4 text-cyan-400 shrink-0" />
+              <span className="text-slate-300">Tab-switch & visibility audit</span>
             </div>
-          )}
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900/70 border border-slate-800 text-xs">
+              <Camera className="w-4 h-4 text-violet-400 shrink-0" />
+              <span className="text-slate-300">Active video track verification</span>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-slate-900/70 border border-slate-800 text-xs">
+              <Mic className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="text-slate-300">Active audio track verification</span>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed border-t border-slate-800/80 pt-3">
+            <strong>Honest Browser Monitoring Disclosure:</strong> Browser monitoring observes page visibility, window blur, and fullscreen changes via standard HTML5 APIs. It does not monitor external operating-system applications or second devices. No raw audio or video is stored or transmitted.
+          </p>
         </div>
 
-        {/* Error message */}
-        {errorMessage && (
-          <div className="p-4 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 text-xs flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            <span>{errorMessage}</span>
-          </div>
-        )}
-
-        {/* Start Button */}
-        <div className="flex items-center justify-between pt-2">
+        {/* Action Controls */}
+        <div className="flex items-center justify-between pt-4">
           <button
             type="button"
             onClick={() => onNavigate('dashboard')}
-            className="px-6 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:text-white"
+            className="px-6 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:text-white cursor-pointer"
           >
             Cancel
           </button>
 
           <button
             type="submit"
+            id="continue-to-device-check-btn"
             disabled={isStarting}
-            className={`px-8 py-4 rounded-xl font-bold text-sm transition-all flex items-center gap-2 group ${
+            className={`px-8 py-4 rounded-xl font-bold text-sm transition-all flex items-center gap-2 group cursor-pointer ${
               isStarting
                 ? 'bg-slate-800 text-slate-400 cursor-not-allowed border border-slate-700'
                 : 'bg-gradient-to-r from-cyan-500 via-blue-600 to-violet-600 hover:from-cyan-400 hover:to-violet-500 text-white shadow-xl shadow-cyan-500/25 hover:shadow-cyan-400/40'
@@ -815,12 +831,12 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
             {isStarting ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
-                <span>Initializing Interview Room...</span>
+                <span>Preparing Device Check...</span>
               </>
             ) : (
               <>
                 <Sparkles className="w-4 h-4" />
-                <span>Enter Interview Room</span>
+                <span>Continue to Device Check</span>
                 <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </>
             )}

@@ -66,11 +66,13 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
   const [isEditingSummary, setIsEditingSummary] = useState(false);
   const [newSkillInput, setNewSkillInput] = useState('');
   const [isAnalyzingJD, setIsAnalyzingJD] = useState(false);
+  const [selectedFileName, setSelectedFileName] = useState<string | null>(resumeData?.fileName || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ─── File Validation & Upload ───────────────────────────────────────────────
   const processFile = async (file: File) => {
     setUploadError(null);
+    setSelectedFileName(file.name);
 
     // 1. Validate File Size (10MB limit)
     const MAX_SIZE = 10 * 1024 * 1024;
@@ -118,6 +120,10 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
         mimeType: file.type
       });
 
+      if (!result?.resumeData || ((result.resumeData.rawTextPreview || '').length < 15 && (!result.resumeData.technicalSkills || result.resumeData.technicalSkills.length === 0))) {
+        throw new Error('Failed to extract meaningful text from resume. Ensure document is not an empty or scanned image.');
+      }
+
       setUploadProgress(100);
       onResumeChange(result.resumeData);
 
@@ -126,24 +132,9 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
       }
     } catch (err: any) {
       console.error('[ResumeUpload] Error:', err);
-      setUploadError(err.message || 'Failed to parse resume document. Ensure file is not password-protected.');
+      setUploadError(err.message || 'Failed to parse resume document. Ensure file is not password-protected or corrupted.');
+      onResumeChange(null);
     } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
-    }
-  };
-
-  const handleLoadSampleResume = async (filename: string) => {
-    try {
-      setIsUploading(true);
-      setUploadProgress(15);
-      const res = await fetch(`/sample-resumes/${filename}`);
-      if (!res.ok) throw new Error('Sample resume file not found.');
-      const blob = await res.blob();
-      const file = new File([blob], filename, { type: 'application/pdf' });
-      await processFile(file);
-    } catch (err: any) {
-      setUploadError(err.message || 'Failed to load test resume.');
       setIsUploading(false);
       setUploadProgress(0);
     }
@@ -164,6 +155,7 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
   };
 
   const handleRemoveResume = () => {
+    setSelectedFileName(null);
     onResumeChange(null);
     onJobMatchChange(null);
     setUploadError(null);
@@ -354,51 +346,27 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
               <span>Editable Details</span>
             </div>
 
-            {/* Fictional Sample Resumes for QA / Interactive Testing */}
-            <div className="pt-3 border-t border-slate-800/80" onClick={(e) => e.stopPropagation()}>
-              <p className="text-[11px] font-semibold text-slate-400 mb-2">
-                Need a realistic sample resume for testing? Select or download below:
-              </p>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <div className="inline-flex rounded-xl bg-slate-800/80 p-0.5 border border-slate-700">
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSampleResume('Ananya_Rao_Resume.pdf')}
-                    className="px-2.5 py-1 text-[11px] font-medium text-cyan-300 hover:bg-slate-700/80 rounded-lg transition-colors flex items-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3 text-cyan-400" />
-                    Ananya Rao (Full-Stack / React & Flask)
-                  </button>
-                  <a
-                    href="/sample-resumes/Ananya_Rao_Resume.pdf"
-                    download="Ananya_Rao_Resume.pdf"
-                    className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
-                    title="Download Ananya Rao Sample PDF"
-                  >
-                    <Download className="w-3 h-3" />
-                  </a>
-                </div>
-
-                <div className="inline-flex rounded-xl bg-slate-800/80 p-0.5 border border-slate-700">
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSampleResume('Vikram_Patel_Resume.pdf')}
-                    className="px-2.5 py-1 text-[11px] font-medium text-amber-300 hover:bg-slate-700/80 rounded-lg transition-colors flex items-center gap-1"
-                  >
-                    <Sparkles className="w-3 h-3 text-amber-400" />
-                    Vikram Patel (Java / Spring Boot)
-                  </button>
-                  <a
-                    href="/sample-resumes/Vikram_Patel_Resume.pdf"
-                    download="Vikram_Patel_Resume.pdf"
-                    className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
-                    title="Download Vikram Patel Sample PDF"
-                  >
-                    <Download className="w-3 h-3" />
-                  </a>
-                </div>
-              </div>
+            <div className="pt-2">
+              <button
+                type="button"
+                id="upload-resume-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
+                }}
+                className="px-6 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 mx-auto shadow-lg shadow-cyan-500/20 transition-all cursor-pointer"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Upload Your Resume (PDF)</span>
+              </button>
             </div>
+
+            {selectedFileName && (
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-cyan-950/70 border border-cyan-500/40 text-xs text-cyan-300 font-semibold mt-2">
+                <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Selected file: {selectedFileName}</span>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -448,6 +416,17 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
           {/* TAB 1: Review & Correct Details */}
           {activeTab === 'review' && (
             <div className="space-y-4 animate-fadeIn">
+              
+              {/* File Info Banner */}
+              <div className="flex items-center justify-between text-xs text-cyan-300 pb-2 border-b border-slate-800">
+                <span className="flex items-center gap-1.5 font-medium">
+                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                  Uploaded Resume File: <strong className="text-white">{resumeData.fileName || selectedFileName || 'Custom Resume'}</strong>
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  {resumeData.technicalSkills?.length || 0} Skills • {resumeData.projects?.length || 0} Projects Extracted
+                </span>
+              </div>
               
               {/* Warnings check (e.g. Scanned / Low text) */}
               {resumeData.warnings && resumeData.warnings.length > 0 && (

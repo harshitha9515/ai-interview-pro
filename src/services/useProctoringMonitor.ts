@@ -49,6 +49,8 @@ interface UseProctoringMonitorResult {
   setConsentGiven: (v: boolean) => void;
   /** Live camera MediaStream, if available (for preview) */
   cameraStream: MediaStream | null;
+  /** Live microphone MediaStream, if available */
+  micStream: MediaStream | null;
   /** Request camera permission and start stream */
   requestCamera: () => Promise<boolean>;
   /** Request microphone permission */
@@ -99,6 +101,7 @@ export function useProctoringMonitor(
   const [activeWarnings, setActiveWarnings] = useState<string[]>([]);
   const [consentGiven, setConsentGiven] = useState<boolean>(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [micStream, setMicStream] = useState<MediaStream | null>(null);
 
   // Refs for tracking to avoid duplicate events
   const isPageHiddenRef = useRef(false);
@@ -282,23 +285,31 @@ export function useProctoringMonitor(
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 320 }, height: { ideal: 240 }, facingMode: 'user' },
       });
+      
+      const videoTracks = stream.getVideoTracks();
+      const hasActiveVideo = videoTracks.some(t => t.readyState === 'live' && t.enabled);
+      if (!hasActiveVideo) {
+        setDeviceStatus(prev => ({ ...prev, camera: 'unavailable' }));
+        return false;
+      }
+
       cameraStreamRef.current = stream;
       setCameraStream(stream);
       setDeviceStatus(prev => ({ ...prev, camera: 'ready' }));
-      logEvent('device_check_passed', { severity: 'info', explanation: 'Camera permission granted.' });
+      logEvent('device_check_passed', { severity: 'info', explanation: 'Camera permission granted and active video track confirmed.' });
 
       // Monitor track for disconnection
-      stream.getVideoTracks().forEach(track => {
+      videoTracks.forEach(track => {
         track.addEventListener('ended', () => {
           setDeviceStatus(prev => ({ ...prev, camera: 'disconnected' }));
           setViolations(prev => ({ ...prev, cameraDisconnected: prev.cameraDisconnected + 1 }));
           logEvent('camera_disconnected', {
-            severity: policy.cameraRequired ? 'critical' : 'warning',
+            severity: 'critical',
             explanation: 'Camera track ended unexpectedly.',
-            actionTaken: policy.cameraRequired ? 'Interview paused' : 'Warning shown',
+            actionTaken: 'Interview paused; camera required',
           });
           addWarning('Camera disconnected. Please reconnect your camera to continue.');
-          if (policy.cameraRequired && isInterviewActiveRef.current) {
+          if (isInterviewActiveRef.current) {
             setProctoringState('paused');
           }
         });
@@ -324,20 +335,32 @@ export function useProctoringMonitor(
     setDeviceStatus(prev => ({ ...prev, microphone: 'requesting' }));
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = stream;
-      setDeviceStatus(prev => ({ ...prev, microphone: 'ready' }));
-      logEvent('device_check_passed', { severity: 'info', explanation: 'Microphone permission granted.' });
+      
+      const audioTracks = stream.getAudioTracks();
+      const hasActiveAudio = audioTracks.some(t => t.readyState === 'live' && t.enabled);
+      if (!hasActiveAudio) {
+        setDeviceStatus(prev => ({ ...prev, microphone: 'unavailable' }));
+        return false;
+      }
 
-      stream.getAudioTracks().forEach(track => {
+      micStreamRef.current = stream;
+      setMicStream(stream);
+      setDeviceStatus(prev => ({ ...prev, microphone: 'ready' }));
+      logEvent('device_check_passed', { severity: 'info', explanation: 'Microphone permission granted and active audio track confirmed.' });
+
+      audioTracks.forEach(track => {
         track.addEventListener('ended', () => {
           setDeviceStatus(prev => ({ ...prev, microphone: 'disconnected' }));
           setViolations(prev => ({ ...prev, micDisconnected: prev.micDisconnected + 1 }));
           logEvent('microphone_disconnected', {
-            severity: 'warning',
+            severity: 'critical',
             explanation: 'Microphone track ended unexpectedly.',
-            actionTaken: 'Warning shown; text input still available.',
+            actionTaken: 'Interview paused; microphone required',
           });
-          addWarning('Microphone disconnected. You can still type your answers in the text box.');
+          addWarning('Microphone disconnected. Please reconnect your microphone to continue.');
+          if (isInterviewActiveRef.current) {
+            setProctoringState('paused');
+          }
         });
       });
       return true;
@@ -401,6 +424,7 @@ export function useProctoringMonitor(
     cameraStreamRef.current = null;
     micStreamRef.current = null;
     setCameraStream(null);
+    setMicStream(null);
   }, []);
 
   // Cleanup on unmount
@@ -438,6 +462,7 @@ export function useProctoringMonitor(
     consentGiven,
     setConsentGiven,
     cameraStream,
+    micStream,
     requestCamera,
     requestMicrophone,
     enterFullscreen,

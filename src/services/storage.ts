@@ -11,31 +11,31 @@ const ASKED_QUESTIONS_KEY = 'ai_interview_pro_asked_questions_v1';
 
 export interface SetupPreferences {
   candidateName?: string;
-  type: InterviewType;
-  role: string;
+  type?: InterviewType | null;
+  role?: string;
   isCustomRole?: boolean;
   customRoleInput?: string;
-  experienceLevel: ExperienceLevel;
-  language: string;
-  difficulty: QuestionDifficulty;
-  questionCount: number;
-  mode: InterviewMode;
-  durationMinutes: number;
+  experienceLevel?: ExperienceLevel | null;
+  language?: string | null;
+  difficulty?: QuestionDifficulty | null;
+  questionCount?: number | null;
+  mode?: InterviewMode | null;
+  durationMinutes?: number | null;
   proctoredMode?: boolean;
 }
 
 export const DEFAULT_SETUP_PREFERENCES: SetupPreferences = {
   candidateName: '',
-  type: 'placement_mixed',
-  role: 'Campus Placement Fresher (All Disciplines)',
+  type: null,
+  role: '',
   isCustomRole: false,
   customRoleInput: '',
-  experienceLevel: 'fresher',
-  language: 'en-IN',
-  difficulty: 'intermediate',
-  questionCount: 5,
-  mode: 'voice',
-  durationMinutes: 15,
+  experienceLevel: null,
+  language: null,
+  difficulty: null,
+  questionCount: null,
+  mode: null,
+  durationMinutes: null,
   proctoredMode: true
 };
 
@@ -146,6 +146,23 @@ export const storageService = {
     }
   },
 
+  clearActiveSession(): void {
+    try {
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      localStorage.removeItem(ACTIVE_INDEX_KEY);
+    } catch (e) {
+      // Ignore
+    }
+  },
+
+  clearSetupPreferences(): void {
+    try {
+      localStorage.removeItem(SETUP_PREFS_KEY);
+    } catch (e) {
+      // Ignore
+    }
+  },
+
   getSetupPreferences(): SetupPreferences {
     try {
       const raw = localStorage.getItem(SETUP_PREFS_KEY);
@@ -158,7 +175,7 @@ export const storageService = {
   saveSetupPreferences(prefs: Partial<SetupPreferences>): void {
     try {
       const current = this.getSetupPreferences();
-      const updated = { ...current, ...prefs };
+      const updated = { ...current, ...prefs, proctoredMode: true };
       localStorage.setItem(SETUP_PREFS_KEY, JSON.stringify(updated));
     } catch (e) {
       console.error('Failed to save setup preferences', e);

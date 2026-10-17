@@ -1,17 +1,12 @@
 /**
  * AI Interview Pro — Device Check Screen
  * =======================================
- * Step 2 of the proctored interview flow (after consent).
- * Tests:
- *   - Camera permission + live preview
- *   - Microphone permission
- *   - Fullscreen readiness (optional)
- * 
- * The candidate can:
- *   - Grant camera and microphone permissions
- *   - See live camera preview and verify positioning
- *   - Enter fullscreen if desired
- *   - Proceed to interview with or without camera (configurable)
+ * Step 2 of the mandatory proctored interview flow (after rules consent).
+ * Verifies:
+ *   - Camera permission + active video track
+ *   - Microphone permission + active audio track
+ *   - Live camera preview and microphone audio monitoring
+ *   - Start Interview button enabled ONLY after all checks pass
  */
 
 import React, { useRef, useEffect, useState } from 'react';
@@ -38,22 +33,35 @@ interface DeviceCheckScreenProps {
   deviceStatus: DeviceStatus;
   isFullscreen: boolean;
   cameraStream: MediaStream | null;
+  micStream?: MediaStream | null;
   onRequestCamera: () => Promise<boolean>;
   onRequestMicrophone: () => Promise<boolean>;
   onEnterFullscreen: () => Promise<boolean>;
   onProceed: () => void;
   onBack: () => void;
-  /** If false, camera is optional and user can proceed without it */
   cameraRequired: boolean;
 }
 
 function DeviceStatusBadge({
   status,
+  hasTrack,
   label,
 }: {
   status: DeviceStatusValue;
+  hasTrack: boolean;
   label: string;
 }) {
+  const isReadyWithTrack = status === 'ready' && hasTrack;
+
+  if (isReadyWithTrack) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border bg-emerald-950/60 text-emerald-300 border-emerald-700/40">
+        <CheckCircle className="w-3 h-3 text-emerald-400" />
+        {label}: Ready (Track Active)
+      </span>
+    );
+  }
+
   const cfg: Record<DeviceStatusValue, { color: string; icon: React.ReactNode; text: string }> = {
     not_checked: {
       color: 'bg-slate-800 text-slate-400 border-slate-700',
@@ -66,9 +74,9 @@ function DeviceStatusBadge({
       text: 'Requesting…',
     },
     ready: {
-      color: 'bg-emerald-950/60 text-emerald-300 border-emerald-700/40',
-      icon: <CheckCircle className="w-3 h-3" />,
-      text: 'Ready',
+      color: 'bg-amber-950/60 text-amber-300 border-amber-700/40',
+      icon: <AlertTriangle className="w-3 h-3" />,
+      text: 'Awaiting Active Track',
     },
     denied: {
       color: 'bg-rose-950/60 text-rose-300 border-rose-700/40',
@@ -88,11 +96,11 @@ function DeviceStatusBadge({
     unsupported: {
       color: 'bg-slate-800 text-slate-500 border-slate-700',
       icon: <XCircle className="w-3 h-3" />,
-      text: 'Unsupported',
+      text: 'Unsupported Browser',
     },
   };
 
-  const c = cfg[status];
+  const c = cfg[status] || cfg.not_checked;
   return (
     <span className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${c.color}`}>
       {c.icon}
@@ -105,6 +113,7 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
   deviceStatus,
   isFullscreen,
   cameraStream,
+  micStream,
   onRequestCamera,
   onRequestMicrophone,
   onEnterFullscreen,
@@ -129,14 +138,20 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
 
   const handleRequestCamera = async () => {
     setRequesting(r => ({ ...r, camera: true }));
-    await onRequestCamera();
-    setRequesting(r => ({ ...r, camera: false }));
+    try {
+      await onRequestCamera();
+    } finally {
+      setRequesting(r => ({ ...r, camera: false }));
+    }
   };
 
   const handleRequestMic = async () => {
     setRequesting(r => ({ ...r, mic: true }));
-    await onRequestMicrophone();
-    setRequesting(r => ({ ...r, mic: false }));
+    try {
+      await onRequestMicrophone();
+    } finally {
+      setRequesting(r => ({ ...r, mic: false }));
+    }
   };
 
   const handleRequestBoth = async () => {
@@ -150,9 +165,12 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
     setRequesting({ camera: false, mic: false });
   };
 
-  const cameraWorking = deviceStatus.camera === 'ready';
-  const micWorking = deviceStatus.microphone === 'ready';
-  // Both camera AND microphone must be accepted before starting
+  // Verify active tracks
+  const hasActiveVideoTrack = !!cameraStream && cameraStream.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
+  const hasActiveAudioTrack = (deviceStatus.microphone === 'ready') && (!micStream || micStream.getAudioTracks().some(t => t.readyState === 'live' && t.enabled));
+
+  const cameraWorking = deviceStatus.camera === 'ready' && hasActiveVideoTrack;
+  const micWorking = deviceStatus.microphone === 'ready' && hasActiveAudioTrack;
   const canProceed = cameraWorking && micWorking;
 
   return (
@@ -164,9 +182,9 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-950 to-cyan-950 border border-violet-500/40 mx-auto flex items-center justify-center">
             <Monitor className="w-7 h-7 text-violet-400" />
           </div>
-          <h2 className="text-2xl font-extrabold text-white">Device Check</h2>
+          <h2 className="text-2xl font-extrabold text-white">Hardware Verification & Device Check</h2>
           <p className="text-sm text-slate-400">
-            Accept camera and microphone permissions to start your interview and enable AI voice interaction.
+            Proctored Placement Mode requires verified camera and microphone access before your interview can begin.
           </p>
         </div>
 
@@ -180,37 +198,38 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
               <div className="text-left">
                 <h4 className="text-xs font-bold text-white">Camera & Microphone Access Required</h4>
                 <p className="text-[11px] text-slate-300">
-                  The interview and interviewer speaking will start only after you accept both camera and microphone permissions.
+                  Click below to prompt browser permission and activate live video and audio streams.
                 </p>
               </div>
             </div>
             <button
               type="button"
+              id="enable-camera-mic-btn"
               onClick={handleRequestBoth}
               disabled={requesting.camera || requesting.mic}
-              className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center gap-2 transition-all shadow-md shrink-0"
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 flex items-center justify-center gap-2 transition-all shadow-md shrink-0 cursor-pointer"
             >
               {requesting.camera || requesting.mic ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Sparkles className="w-4 h-4" />
               )}
-              <span>Allow Camera & Microphone</span>
+              <span>Enable Camera and Microphone</span>
             </button>
           </div>
         )}
 
-        {/* Device Status Summary */}
+        {/* Device Status Summary Badges */}
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <DeviceStatusBadge status={deviceStatus.camera} label="Camera" />
-          <DeviceStatusBadge status={deviceStatus.microphone} label="Microphone" />
+          <DeviceStatusBadge status={deviceStatus.camera} hasTrack={hasActiveVideoTrack} label="Camera" />
+          <DeviceStatusBadge status={deviceStatus.microphone} hasTrack={hasActiveAudioTrack} label="Microphone" />
           <span className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${
             isFullscreen
               ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700/40'
               : 'bg-slate-800 text-slate-400 border-slate-700'
           }`}>
             <Maximize2 className="w-3 h-3" />
-            Fullscreen: {isFullscreen ? 'Active' : 'Not Active'}
+            Fullscreen: {isFullscreen ? 'Active' : 'Optional'}
           </span>
         </div>
 
@@ -224,21 +243,14 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
                   ? <Camera className="w-4 h-4 text-emerald-400" />
                   : <CameraOff className="w-4 h-4 text-slate-500" />}
                 <h3 className="text-sm font-bold text-white">Camera</h3>
-                {!cameraRequired && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                    Optional
-                  </span>
-                )}
-                {cameraRequired && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-700/40">
-                    Required
-                  </span>
-                )}
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-700/40 font-semibold">
+                  Required
+                </span>
               </div>
               {cameraWorking && (
                 <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  LIVE
+                  LIVE PREVIEW
                 </span>
               )}
             </div>
@@ -254,26 +266,17 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
                   className="w-full h-full object-cover scale-x-[-1]"
                 />
               ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-500">
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-slate-500 p-4">
                   <CameraOff className="w-8 h-8" />
                   <p className="text-xs text-center">
                     {deviceStatus.camera === 'denied'
-                      ? 'Camera permission denied.\nCheck your browser settings.'
+                      ? 'Camera permission denied.'
                       : deviceStatus.camera === 'requesting'
                       ? 'Requesting camera access…'
                       : deviceStatus.camera === 'unavailable'
-                      ? 'No camera device found.'
-                      : deviceStatus.camera === 'unsupported'
-                      ? 'Camera not supported in this browser.'
+                      ? 'No active video stream detected.'
                       : 'Camera not yet enabled.'}
                   </p>
-                </div>
-              )}
-              {cameraWorking && (
-                <div className="absolute bottom-2 left-2 right-2 text-center">
-                  <span className="text-[10px] px-2 py-1 rounded bg-black/70 text-cyan-300">
-                    Position your face in the frame and ensure you're well-lit.
-                  </span>
                 </div>
               )}
             </div>
@@ -291,34 +294,41 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
               {requesting.camera || deviceStatus.camera === 'requesting' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : cameraWorking ? (
-                <RefreshCw className="w-4 h-4" />
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
               ) : (
                 <Camera className="w-4 h-4" />
               )}
-              {cameraWorking ? 'Camera Ready — Click to Re-test' : 'Enable Camera'}
+              {cameraWorking ? 'Camera Ready (Active Video Track)' : 'Request Camera Permission'}
             </button>
 
             {deviceStatus.camera === 'denied' && (
               <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-700/40 text-rose-300 text-xs leading-relaxed">
-                <strong>Permission Denied:</strong> Open your browser settings → Site Permissions →
-                Camera and allow access for this site, then refresh.
+                <strong>Camera Permission Denied:</strong> Click the permissions icon (padlock/tune) in your browser URL bar, set Camera to <strong>Allow</strong>, and click retry.
               </div>
             )}
           </div>
 
           {/* Microphone Panel */}
           <div className="glass-card rounded-2xl p-5 border border-slate-800 space-y-4">
-            <div className="flex items-center gap-2">
-              {micWorking
-                ? <Mic className="w-4 h-4 text-emerald-400" />
-                : <MicOff className="w-4 h-4 text-slate-500" />}
-              <h3 className="text-sm font-bold text-white">Microphone</h3>
-              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">
-                Text input always available
-              </span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {micWorking
+                  ? <Mic className="w-4 h-4 text-emerald-400" />
+                  : <MicOff className="w-4 h-4 text-slate-500" />}
+                <h3 className="text-sm font-bold text-white">Microphone</h3>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-700/40 font-semibold">
+                  Required
+                </span>
+              </div>
+              {micWorking && (
+                <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-bold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  ACTIVE AUDIO
+                </span>
+              )}
             </div>
 
-            <div className={`w-full rounded-xl p-5 border flex flex-col items-center justify-center gap-3 min-h-[140px] ${
+            <div className={`w-full rounded-xl p-5 border flex flex-col items-center justify-center gap-3 aspect-video ${
               micWorking
                 ? 'bg-emerald-950/20 border-emerald-700/40'
                 : 'bg-slate-900 border-slate-700'
@@ -328,19 +338,19 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
                   <div className="w-12 h-12 rounded-full bg-emerald-950/80 border-2 border-emerald-500/50 flex items-center justify-center">
                     <Mic className="w-6 h-6 text-emerald-400" />
                   </div>
-                  <div className="flex items-center gap-1">
-                    {[...Array(5)].map((_, i) => (
+                  <div className="flex items-center gap-1.5 py-1">
+                    {[12, 22, 16, 28, 14, 20, 10].map((h, i) => (
                       <div
                         key={i}
-                        className="w-1 bg-emerald-400 rounded-full animate-pulse"
-                        style={{ height: `${8 + Math.random() * 16}px`, animationDelay: `${i * 100}ms` }}
+                        className="w-1.5 bg-emerald-400 rounded-full animate-pulse"
+                        style={{ height: `${h}px`, animationDelay: `${i * 120}ms` }}
                       />
                     ))}
                   </div>
-                  <p className="text-xs text-emerald-300 font-semibold">Microphone Ready</p>
+                  <p className="text-xs text-emerald-300 font-semibold">Microphone Ready (Audio Track Active)</p>
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-2 text-slate-500">
+                <div className="flex flex-col items-center gap-2 text-slate-500 p-4">
                   <MicOff className="w-8 h-8" />
                   <p className="text-xs text-center">
                     {deviceStatus.microphone === 'denied'
@@ -348,7 +358,7 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
                       : deviceStatus.microphone === 'requesting'
                       ? 'Requesting microphone access…'
                       : deviceStatus.microphone === 'unavailable'
-                      ? 'No microphone device found.'
+                      ? 'No active audio stream detected.'
                       : 'Microphone not yet enabled.'}
                   </p>
                 </div>
@@ -368,23 +378,16 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
               {requesting.mic || deviceStatus.microphone === 'requesting' ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : micWorking ? (
-                <RefreshCw className="w-4 h-4" />
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
               ) : (
                 <Mic className="w-4 h-4" />
               )}
-              {micWorking ? 'Microphone Ready — Click to Re-test' : 'Test Microphone'}
+              {micWorking ? 'Microphone Ready (Active Audio Track)' : 'Request Microphone Permission'}
             </button>
-
-            <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-xs text-slate-400 leading-relaxed">
-              <strong className="text-slate-300">Note:</strong> If microphone access is denied or
-              unavailable, you can still complete the interview by typing your answers. Text input is
-              always available.
-            </div>
 
             {deviceStatus.microphone === 'denied' && (
               <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-700/40 text-rose-300 text-xs leading-relaxed">
-                <strong>Permission Denied:</strong> Open your browser settings → Site Permissions →
-                Microphone and allow access, then refresh.
+                <strong>Microphone Permission Denied:</strong> Click the permissions icon (padlock/tune) in your browser URL bar, set Microphone to <strong>Allow</strong>, and click retry.
               </div>
             )}
           </div>
@@ -402,9 +405,7 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400">
-                Start the interview in fullscreen to minimise distractions. Exiting fullscreen will
-                be logged but will not block the interview. You can exit fullscreen at any time using
-                Escape or F11.
+                You can start in fullscreen to minimize distractions. You can exit anytime via Escape or F11.
               </p>
             </div>
             <button
@@ -428,13 +429,14 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
           <button
             type="button"
             onClick={onBack}
-            className="w-full sm:w-auto px-6 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-all"
+            className="w-full sm:w-auto px-6 py-3 rounded-xl text-xs font-semibold text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-700 transition-all cursor-pointer"
           >
             ← Back to Rules
           </button>
 
           <button
             type="button"
+            id="start-interview-btn"
             disabled={!canProceed}
             onClick={onProceed}
             className={`w-full sm:flex-1 px-8 py-3.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2.5 transition-all ${
@@ -444,14 +446,17 @@ export const DeviceCheckScreen: React.FC<DeviceCheckScreenProps> = ({
             }`}
           >
             <ChevronRight className="w-4 h-4" />
-            {canProceed ? 'Start Proctored Interview & Begin Speaking' : 'Grant Camera & Microphone to Start'}
+            {canProceed ? 'Start Interview' : 'Grant Camera & Microphone to Start'}
           </button>
         </div>
 
         {!canProceed && (
-          <p className="text-center text-xs text-amber-300 bg-amber-950/40 p-3 rounded-xl border border-amber-600/30">
-            ⚠️ The interview will start and the interviewer will begin speaking only after you accept both camera and microphone permissions.
-          </p>
+          <div className="text-center text-xs text-amber-300 bg-amber-950/40 p-3 rounded-xl border border-amber-600/30 flex items-center justify-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+            <span>
+              Both camera and microphone permissions with active media tracks must be verified before the <strong>Start Interview</strong> button is unlocked.
+            </span>
+          </div>
         )}
       </div>
     </div>
