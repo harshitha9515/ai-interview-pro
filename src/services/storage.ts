@@ -1,4 +1,5 @@
 import { InterviewSession, UserSettings, InterviewType, ExperienceLevel, QuestionDifficulty, InterviewMode } from '../types/interview';
+import { ProctoringSnapshot } from '../types/proctoring';
 import { DEFAULT_USER_SETTINGS } from '../data/mockData';
 
 const SESSIONS_KEY = 'ai_interview_pro_sessions_v1';
@@ -20,6 +21,7 @@ export interface SetupPreferences {
   questionCount: number;
   mode: InterviewMode;
   durationMinutes: number;
+  proctoredMode?: boolean;
 }
 
 export const DEFAULT_SETUP_PREFERENCES: SetupPreferences = {
@@ -33,7 +35,8 @@ export const DEFAULT_SETUP_PREFERENCES: SetupPreferences = {
   difficulty: 'intermediate',
   questionCount: 5,
   mode: 'voice',
-  durationMinutes: 15
+  durationMinutes: 15,
+  proctoredMode: true
 };
 
 export const storageService = {
@@ -192,6 +195,32 @@ export const storageService = {
       localStorage.removeItem(ASKED_QUESTIONS_KEY);
     } catch (e) {
       console.error('Failed to clear asked questions history', e);
+    }
+  },
+
+  saveProctoringSnapshot(sessionId: string, snapshot: ProctoringSnapshot): void {
+    try {
+      localStorage.setItem(`ai_interview_pro_proctoring_${sessionId}`, JSON.stringify(snapshot));
+      const session = this.getSessionById(sessionId);
+      if (session) {
+        session.isProctored = true;
+        session.proctoringSnapshot = snapshot;
+        this.saveSession(session);
+      }
+    } catch (e) {
+      console.error('Failed to save proctoring snapshot', e);
+    }
+  },
+
+  getProctoringSnapshot(sessionId: string): ProctoringSnapshot | null {
+    try {
+      const data = localStorage.getItem(`ai_interview_pro_proctoring_${sessionId}`);
+      if (data) return JSON.parse(data);
+      const session = this.getSessionById(sessionId);
+      return session?.proctoringSnapshot || null;
+    } catch (e) {
+      console.error('Failed to load proctoring snapshot', e);
+      return null;
     }
   }
 };

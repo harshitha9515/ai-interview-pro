@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Mic, 
   MicOff, 
@@ -34,6 +34,13 @@ import { ttsService } from '../services/speechSynthesis';
 import { soundService } from '../services/soundEffects';
 import { SUPPORTED_LANGUAGES, getLanguageConfig, checkVoiceSupport } from '../config/languages';
 import { useToast } from '../context/ToastContext';
+import { useProctoringMonitor } from '../services/useProctoringMonitor';
+import { DEFAULT_VIOLATION_POLICY } from '../types/proctoring';
+import { ProctoringRulesScreen } from '../components/proctoring/ProctoringRulesScreen';
+import { DeviceCheckScreen } from '../components/proctoring/DeviceCheckScreen';
+import { ProctorMonitorPanel } from '../components/proctoring/ProctorMonitorPanel';
+import { ProctoringWarningOverlay } from '../components/proctoring/ProctoringWarningOverlay';
+import { storageService } from '../services/storage';
 
 interface InterviewRoomPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -81,12 +88,76 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
   const [confirmTemplatePending, setConfirmTemplatePending] = useState<boolean>(false);
   const { info: toastInfo, success: toastSuccess, error: toastError } = useToast();
 
+  // ─── Proctoring Integration ──────────────────────────────────────────────
+  const urlParams = useMemo(() => new URLSearchParams(window.location.hash.split('?')[1] || ''), []);
+  const isProctoredMode = urlParams.get('proctoredMode') === 'true' || currentSession?.isProctored === true;
+
+  const proctoring = useProctoringMonitor({
+    sessionId: currentSession?.id || 'no-session',
+    enabled: isProctoredMode,
+    policy: DEFAULT_VIOLATION_POLICY,
+    requestFullscreen: false,
+    skipDeviceCheck: !isProctoredMode,
+  });
+
+  // Sync proctoring pause with interview pause
+  useEffect(() => {
+    if (!isProctoredMode) return;
+    if (proctoring.proctoringState === 'paused' || proctoring.proctoringState === 'requires_review') {
+      // Ensure interview timer is paused
+      if (!isPaused) {
+        togglePause();
+      }
+    }
+  }, [proctoring.proctoringState, isProctoredMode]);
+
+  // Cleanup camera on session end and persist final snapshot
+  useEffect(() => {
+    if (currentSession?.status === 'completed' && isProctoredMode) {
+      proctoring.completeInterview();
+      proctoring.stopAllTracks();
+      storageService.saveProctoringSnapshot(currentSession.id, proctoring.getSnapshot());
+    }
+  }, [currentSession?.status, isProctoredMode]);
+
+  // Persist latest proctoring snapshot whenever state, violations, or events change
+  useEffect(() => {
+    if (isProctoredMode && currentSession?.id) {
+      storageService.saveProctoringSnapshot(currentSession.id, proctoring.getSnapshot());
+    }
+  }, [
+    isProctoredMode,
+    currentSession?.id,
+    proctoring.proctoringState,
+    proctoring.violations.tabHidden,
+    proctoring.violations.windowBlur,
+    proctoring.violations.fullscreenExited,
+    proctoring.violations.cameraDisconnected,
+    proctoring.violations.micDisconnected,
+    proctoring.eventLog.length
+  ]);
+
+  // Set proctoring to in_progress when non-proctored, or when ready state triggers
+  useEffect(() => {
+    if (!isProctoredMode && currentSession?.status === 'in_progress') {
+      proctoring.setProctoringState('in_progress');
+    }
+  }, [isProctoredMode, currentSession?.status]);
+
   // Automatically navigate to results when session status becomes 'completed'
   useEffect(() => {
     if (currentSession && currentSession.status === 'completed') {
       onNavigate('results', { sessionId: currentSession.id });
     }
   }, [currentSession?.status, currentSession?.id, onNavigate]);
+
+  // Cancel any speech while candidate is on instructions or device check screen
+  useEffect(() => {
+    if (isProctoredMode && (proctoring.proctoringState === 'instructions' || proctoring.proctoringState === 'device_check')) {
+      ttsService.cancel();
+      setAiStatus('idle');
+    }
+  }, [isProctoredMode, proctoring.proctoringState, setAiStatus]);
 
   // Load voices for capability detection and unlock audio on room entry
   useEffect(() => {
@@ -215,6 +286,10 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
   };
 
   const handleSubmit = async () => {
+    if (isProctoredMode && (proctoring.proctoringState === 'paused' || proctoring.proctoringState === 'requires_review')) {
+      toastInfo('Interview Paused', 'Please resume the interview to submit your answer.');
+      return;
+    }
     if (isRecording) {
       stopRecording();
     }
@@ -248,6 +323,11 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
   const handleConfirmEnd = async () => {
     if (isRecording) stopRecording();
     setShowEndConfirmModal(false);
+    if (isProctoredMode && currentSession?.id) {
+      proctoring.completeInterview();
+      proctoring.stopAllTracks();
+      storageService.saveProctoringSnapshot(currentSession.id, proctoring.getSnapshot());
+    }
     const finishedId = await endInterview();
     onNavigate('results', { sessionId: finishedId });
   };
@@ -277,12 +357,63 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
     );
   }
 
+  // ─── Proctored Mode: Rules Screen ─────────────────────────────────────────
+  if (isProctoredMode && proctoring.proctoringState === 'instructions') {
+    return (
+      <ProctoringRulesScreen
+        candidateName={currentSession?.candidateName || 'Candidate'}
+        onConsent={() => {
+          proctoring.setConsentGiven(true);
+          proctoring.setProctoringState('device_check');
+        }}
+        onDecline={() => onNavigate('setup')}
+      />
+    );
+  }
+
+  // ─── Proctored Mode: Device Check Screen ──────────────────────────────────
+  if (isProctoredMode && proctoring.proctoringState === 'device_check') {
+    return (
+      <DeviceCheckScreen
+        deviceStatus={proctoring.deviceStatus}
+        isFullscreen={proctoring.isFullscreen}
+        cameraStream={proctoring.cameraStream}
+        onRequestCamera={proctoring.requestCamera}
+        onRequestMicrophone={proctoring.requestMicrophone}
+        onEnterFullscreen={proctoring.enterFullscreen}
+        onProceed={() => {
+          proctoring.setProctoringState('in_progress');
+          // Speak question 1 only after permissions are accepted and candidate enters room
+          ttsService.unlockAudio();
+          setTimeout(() => {
+            repeatCurrentQuestion();
+          }, 350);
+        }}
+        onBack={() => proctoring.setProctoringState('instructions')}
+        cameraRequired={true}
+      />
+    );
+  }
+
   const currentQNum = currentQuestionIndex + 1;
   const totalQCount = currentSession.questions.length;
   const progressPercent = Math.round((currentQNum / totalQCount) * 100);
 
   return (
     <div className="min-h-[calc(100vh-4.5rem)] flex flex-col justify-between max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 relative">
+
+      {/* Proctoring Warning / Pause Overlay */}
+      {isProctoredMode && (
+        <ProctoringWarningOverlay
+          state={proctoring.proctoringState}
+          violations={proctoring.violations}
+          onResume={() => {
+            proctoring.resumeFromPause();
+            if (isPaused) togglePause();
+          }}
+          reviewNote="Your interview timer is paused. All submitted answers are preserved."
+        />
+      )}
 
       {/* Post-Answer Score Flash Banner */}
       {lastEvalScore !== null && (
@@ -493,6 +624,24 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
                 repeatCurrentQuestion();
               }}
             />
+
+            {/* Proctor Monitor Panel (inside avatar column for compact layout) */}
+            {isProctoredMode && (
+              <div className="w-full mt-3">
+                <ProctorMonitorPanel
+                  proctoringState={proctoring.proctoringState}
+                  deviceStatus={proctoring.deviceStatus}
+                  isFullscreen={proctoring.isFullscreen}
+                  violations={proctoring.violations}
+                  activeWarnings={proctoring.activeWarnings}
+                  currentQuestionNum={currentQNum}
+                  totalQuestions={totalQCount}
+                  timeRemainingSeconds={timeRemainingSeconds}
+                  cameraStream={proctoring.cameraStream}
+                  onDismissWarning={proctoring.dismissWarning}
+                />
+              </div>
+            )}
             {/* Live Real-time Spoken Subtitles Caption */}
             {aiStatus === 'speaking' && (
               <div className="mt-3 w-full max-w-sm px-4 py-2.5 rounded-2xl bg-slate-900/90 border border-cyan-500/40 text-center shadow-lg shadow-cyan-950/50 animate-fadeIn">

@@ -325,6 +325,54 @@ export const pdfExportService = {
       y += 38;
     });
 
+    // ─── Section F: Proctoring Audit & Integrity Telemetry ───────────────────────
+    const proctorSnapshot = session.proctoringSnapshot;
+    if (session.isProctored || proctorSnapshot) {
+      checkPageBreak(30);
+      const violations = proctorSnapshot?.violations || {
+        tabHidden: 0,
+        windowBlur: 0,
+        fullscreenExited: 0,
+        cameraDisconnected: 0,
+        micDisconnected: 0
+      };
+      const isClean = violations.tabHidden === 0 && violations.cameraDisconnected === 0 && violations.fullscreenExited === 0;
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.setTextColor(15, 23, 42);
+      doc.text('Proctored Mode Telemetry & Integrity Audit', margin, y);
+      y += 5;
+
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(margin, y, contentWidth, 22, 1.5, 1.5, 'FD');
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      if (isClean) {
+        doc.setTextColor(16, 149, 93);
+        doc.text('Integrity Status: VERIFIED CLEAN (No deviations recorded)', margin + 3, y + 5);
+      } else if (violations.tabHidden >= 3) {
+        doc.setTextColor(225, 29, 72);
+        doc.text('Integrity Status: FLAGGED FOR REVIEW (Threshold exceeded)', margin + 3, y + 5);
+      } else {
+        doc.setTextColor(217, 119, 6);
+        doc.text('Integrity Status: MINOR DEVIATIONS (Reviewer discretion)', margin + 3, y + 5);
+      }
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(71, 85, 105);
+      const metricsText = `Tab switches: ${violations.tabHidden} | Focus shifts: ${violations.windowBlur} | Fullscreen exits: ${violations.fullscreenExited} | Camera drops: ${violations.cameraDisconnected} | Events logged: ${proctorSnapshot?.eventLog?.length || 0}`;
+      doc.text(metricsText, margin + 3, y + 10);
+
+      const auditDisclaimer = 'Note: Technical events are recorded for transparency. Scoring is derived purely from candidate answers without arbitrary deductions.';
+      doc.text(auditDisclaimer, margin + 3, y + 16);
+
+      y += 26;
+    }
+
     // ─── Legal & Fairness Disclaimer ────────────────────────────────────────────
     checkPageBreak(18);
     doc.setFillColor(241, 245, 249);

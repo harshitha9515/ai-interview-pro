@@ -36,6 +36,7 @@ export interface StartInterviewParams {
   jobDescriptionText?: string;
   jobMatchAnalysis?: JobMatchAnalysis | null;
   interviewFocus?: InterviewFocus;
+  isProctored?: boolean;
 }
 
 export interface AIProviderStatus {
@@ -205,14 +206,20 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       currentQuestion &&
       currentSession?.status === 'in_progress' &&
       settings.autoSpeakQuestions &&
-      !isPaused &&
-      lastSpokenQuestionIdRef.current !== currentQuestion.id
+      !isPaused
     ) {
-      lastSpokenQuestionIdRef.current = currentQuestion.id;
-      soundService.play('question_start');
-      speakQuestion(currentQuestion.question);
+      // For proctored sessions, do not speak Question 1 while candidate is on the rules or device check screen
+      if (currentSession?.isProctored && currentQuestionIndex === 0 && lastSpokenQuestionIdRef.current === null) {
+        return;
+      }
+
+      if (lastSpokenQuestionIdRef.current !== currentQuestion.id) {
+        lastSpokenQuestionIdRef.current = currentQuestion.id;
+        soundService.play('question_start');
+        speakQuestion(currentQuestion.question);
+      }
     }
-  }, [currentQuestion?.id, currentSession?.status, isPaused, settings.autoSpeakQuestions]);
+  }, [currentQuestion?.id, currentSession?.status, currentSession?.isProctored, currentQuestionIndex, isPaused, settings.autoSpeakQuestions]);
 
   const speakQuestion = (text: string) => {
     if (!text || !text.trim()) return;
@@ -297,14 +304,17 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const effectiveJobMatch = params.jobMatchAnalysis !== undefined ? params.jobMatchAnalysis : jobMatchAnalysis;
     const effectiveFocus = params.interviewFocus || interviewFocus;
 
-    // Generate initial questions strictly tailored to candidate name, role, and experience without repetition
+    // Generate initial questions strictly grounded in candidate's resume, role, and experience without repetition
     const seededQuestions = roleQuestionEngine.generateSessionQuestions({
       candidateName,
       role: params.role,
       experienceLevel: params.experienceLevel,
       category: params.type,
       difficulty: params.difficulty,
-      questionCount: params.questionCount
+      questionCount: params.questionCount,
+      resumeData: effectiveResumeData,
+      jobDescription: effectiveJD,
+      interviewFocus: effectiveFocus
     });
 
     const sessionId = `session_${Date.now()}`;
@@ -327,7 +337,8 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       resumeData: effectiveResumeData || undefined,
       jobDescriptionText: effectiveJD || undefined,
       jobMatchAnalysis: effectiveJobMatch || undefined,
-      interviewFocus: effectiveFocus
+      interviewFocus: effectiveFocus,
+      isProctored: params.isProctored ?? false
     };
 
     setCurrentSession(newSession);
@@ -370,14 +381,17 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const newId = `session_${Date.now()}`;
     const candidateName = pastSession.candidateName || pastSession.userName || 'Candidate';
 
-    // Generate fresh, non-repeating questions for the restarted session
+    // Generate fresh, non-repeating questions for the restarted session grounded in resume
     const freshQuestions = roleQuestionEngine.generateSessionQuestions({
       candidateName,
       role: pastSession.role,
       experienceLevel: pastSession.experienceLevel,
       category: pastSession.type,
       difficulty: pastSession.difficulty,
-      questionCount: pastSession.totalQuestions || 5
+      questionCount: pastSession.totalQuestions || 5,
+      resumeData: pastSession.resumeData,
+      jobDescription: pastSession.jobDescriptionText,
+      interviewFocus: pastSession.interviewFocus
     });
 
     const restarted: InterviewSession = {
@@ -408,6 +422,8 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const repeatCurrentQuestion = () => {
     if (currentQuestion) {
+      lastSpokenQuestionIdRef.current = currentQuestion.id;
+      soundService.play('question_start');
       speakQuestion(currentQuestion.question);
     }
   };
@@ -615,16 +631,11 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       summary = aiEvaluatorService.generateSessionSummary(currentSession, currentSession.responses);
     }
 
-    // Overall score calculated using documented category weights
-    let totalScore = 0;
-    if (summary?.categoryWeights && summary.categoryWeights.length > 0) {
-      totalScore = summary.categoryWeights.reduce((acc, cw) => acc + cw.weightedContribution, 0);
-    } else if (currentSession.responses.length > 0) {
-      totalScore = Math.round(
-        currentSession.responses.reduce((acc, r) => acc + (r.evaluations?.score ?? 0), 0) /
-        currentSession.responses.length
-      );
-    }
+    // Overall score calculated based on all totalQuestions in session
+    // Rule 6.3: Unanswered or skipped questions count as 0 towards the total possible marks
+    const totalQCount = Math.max(currentSession.totalQuestions || 0, currentSession.questions.length, currentSession.responses.length, 1);
+    const sumEarnedScores = currentSession.responses.reduce((acc, r) => acc + (r.evaluations?.score ?? 0), 0);
+    let totalScore = Math.round(sumEarnedScores / totalQCount);
     totalScore = Math.min(100, Math.max(0, totalScore));
 
     // Generate Final Evidence-Based Recommendation

@@ -20,7 +20,8 @@ import {
   Loader2, 
   ShieldCheck,
   RefreshCw,
-  Search
+  Search,
+  Download
 } from 'lucide-react';
 import { 
   ExtractedResumeData, 
@@ -127,6 +128,22 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
       console.error('[ResumeUpload] Error:', err);
       setUploadError(err.message || 'Failed to parse resume document. Ensure file is not password-protected.');
     } finally {
+      setIsUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleLoadSampleResume = async (filename: string) => {
+    try {
+      setIsUploading(true);
+      setUploadProgress(15);
+      const res = await fetch(`/sample-resumes/${filename}`);
+      if (!res.ok) throw new Error('Sample resume file not found.');
+      const blob = await res.blob();
+      const file = new File([blob], filename, { type: 'application/pdf' });
+      await processFile(file);
+    } catch (err: any) {
+      setUploadError(err.message || 'Failed to load test resume.');
       setIsUploading(false);
       setUploadProgress(0);
     }
@@ -335,6 +352,52 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
               <span>No Disk Leaks</span>
               <span>•</span>
               <span>Editable Details</span>
+            </div>
+
+            {/* Fictional Sample Resumes for QA / Interactive Testing */}
+            <div className="pt-3 border-t border-slate-800/80" onClick={(e) => e.stopPropagation()}>
+              <p className="text-[11px] font-semibold text-slate-400 mb-2">
+                Need a realistic sample resume for testing? Select or download below:
+              </p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <div className="inline-flex rounded-xl bg-slate-800/80 p-0.5 border border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSampleResume('Ananya_Rao_Resume.pdf')}
+                    className="px-2.5 py-1 text-[11px] font-medium text-cyan-300 hover:bg-slate-700/80 rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-cyan-400" />
+                    Ananya Rao (Full-Stack / React & Flask)
+                  </button>
+                  <a
+                    href="/sample-resumes/Ananya_Rao_Resume.pdf"
+                    download="Ananya_Rao_Resume.pdf"
+                    className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
+                    title="Download Ananya Rao Sample PDF"
+                  >
+                    <Download className="w-3 h-3" />
+                  </a>
+                </div>
+
+                <div className="inline-flex rounded-xl bg-slate-800/80 p-0.5 border border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSampleResume('Vikram_Patel_Resume.pdf')}
+                    className="px-2.5 py-1 text-[11px] font-medium text-amber-300 hover:bg-slate-700/80 rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-400" />
+                    Vikram Patel (Java / Spring Boot)
+                  </button>
+                  <a
+                    href="/sample-resumes/Vikram_Patel_Resume.pdf"
+                    download="Vikram_Patel_Resume.pdf"
+                    className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
+                    title="Download Vikram Patel Sample PDF"
+                  >
+                    <Download className="w-3 h-3" />
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
         </div>

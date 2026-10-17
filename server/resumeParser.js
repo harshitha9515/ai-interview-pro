@@ -200,8 +200,17 @@ export function heuristicParseResumeText(rawText, fileName) {
   const projects = [];
   if (sections.projects.length > 0) {
     let currentProj = null;
-    for (const l of sections.projects.slice(0, 15)) {
-      if (l.length < 50 && !l.startsWith('-') && !l.startsWith('•')) {
+    const isLikelyTitle = (str) => {
+      if (str.length > 60 || str.startsWith('-') || str.startsWith('•') || str.endsWith('.')) return false;
+      // If it starts with common sentence words, it is a description continuation
+      if (/^(uses|using|used|built|developed|designed|implemented|supports|allowing|allows|frontend|backend|for|includes|including|contributed)\b/i.test(str)) {
+        return false;
+      }
+      return true;
+    };
+
+    for (const l of sections.projects.slice(0, 20)) {
+      if (isLikelyTitle(l)) {
         if (currentProj) projects.push(currentProj);
         const techFound = knownTechSkills.filter(s => hasKeyword(l, s));
         currentProj = {

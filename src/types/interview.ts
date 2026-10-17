@@ -38,6 +38,7 @@ export interface Question {
   source?: 'ai_generated' | 'predefined';
   isFollowUp?: boolean;
   parentQuestionId?: string;
+  resumeEvidence?: string;
   testCases?: QuestionTestCase[];
   rubricCriteria: {
     criterion: string;
@@ -145,6 +146,8 @@ export interface InterviewSession {
   jobMatchAnalysis?: JobMatchAnalysis;
   interviewFocus?: InterviewFocus;
   finalRecommendation?: FinalCandidateRecommendation;
+  isProctored?: boolean;
+  proctoringSnapshot?: import('./proctoring').ProctoringSnapshot;
 }
 
 // ─── Resume Analysis Types ───────────────────────────────────────────────────

@@ -1,15 +1,5 @@
-import { Question, InterviewType, ExperienceLevel, QuestionDifficulty } from '../types/interview';
+import { Question, InterviewType, ExperienceLevel, QuestionDifficulty, ExtractedResumeData, InterviewFocus } from '../types/interview';
 import { storageService } from './storage';
-
-/**
- * Role-and-Experience Tailored Dynamic Question Engine
- * ====================================================
- * Guarantees:
- * 1. Questions are strictly based on the target role and experience level.
- * 2. Every question addresses the candidate directly by their manually entered name.
- * 3. NO repetition of questions — checks against cross-session history and session history.
- * 4. Infinite permutations using rich scenario templates, constraints, and domain verticals.
- */
 
 export interface GenerateRoleQuestionOptions {
   candidateName: string;
@@ -21,6 +11,9 @@ export interface GenerateRoleQuestionOptions {
   questionNumber: number;
   totalQuestions: number;
   excludeSignatures?: string[];
+  resumeData?: ExtractedResumeData | null;
+  jobDescription?: string;
+  interviewFocus?: InterviewFocus;
 }
 
 // ─── Normalization & Deduplication Helpers ─────────────────────────────────────
@@ -623,6 +616,175 @@ function generateDynamicCustomRoleQuestion(
   };
 }
 
+// ─── Resume-Grounded Question Generator ────────────────────────────────────────
+
+function generateResumeGroundedQuestion(
+  opts: GenerateRoleQuestionOptions,
+  category: InterviewType,
+  excludeSet: Set<string>
+): Question | null {
+  const resume = opts.resumeData;
+  if (!resume) return null;
+
+  const candidateName = opts.candidateName?.trim() || resume.candidateName || 'Candidate';
+  const projects = (resume.projects || []).filter(p => p.title && p.title.trim().length > 3);
+  const skills = (resume.technicalSkills || []).concat(resume.toolsAndTechnologies || []).filter(s => s && s.trim());
+  const experience = (resume.experience || []).filter(e => e.company || e.role);
+  const education = (resume.education || []).filter(ed => ed.degree || ed.institution);
+
+  // Pool of candidate questions directly generated from the actual uploaded resume
+  const candidatePool: Array<{
+    category: InterviewType;
+    question: string;
+    contextHint: string;
+    expectedKeywords: string[];
+    modelAnswer: string;
+    resumeEvidence: string;
+    rubricCriteria: { criterion: string; weight: number; description: string }[];
+  }> = [];
+
+  // 1. Project-grounded questions
+  projects.forEach((proj, idx) => {
+    const techList = (proj.technologies || []).filter(t => t.trim());
+    const techStr = techList.length > 0 ? techList.join(' and ') : 'your chosen stack';
+
+    // Architecture & data flow
+    candidatePool.push({
+      category: 'technical',
+      question: `${candidateName}, on your resume you highlighted the "${proj.title}" project built with ${techStr}. Can you walk me through the system architecture and explain how data flows across the components?`,
+      contextHint: `Discuss the component breakdown, API endpoints, and data lifecycle in "${proj.title}".`,
+      expectedKeywords: [proj.title, ...techList, 'architecture', 'data flow', 'API', 'components', 'state'],
+      modelAnswer: `In "${proj.title}", the architecture cleanly separates concerns. Requests originate from the frontend client, pass through validated endpoints, and execute domain logic against persistent storage, returning structured payloads.`,
+      resumeEvidence: `Project: ${proj.title} (${proj.technologies?.join(', ') || 'Listed on resume'})`,
+      rubricCriteria: [
+        { criterion: 'Architecture & Component Design', weight: 40, description: `Deep understanding of "${proj.title}" architecture.` },
+        { criterion: 'Data Flow & Protocols', weight: 35, description: 'Explaining communication between layers.' },
+        { criterion: 'Clarity & Technical Depth', weight: 25, description: 'Articulating individual contribution.' }
+      ]
+    });
+
+    // Technical trade-offs & challenges
+    candidatePool.push({
+      category: 'technical',
+      question: `${candidateName}, regarding your project "${proj.title}": what was the most difficult technical bug or architectural obstacle you encountered, and how did you resolve it?`,
+      contextHint: `Recall a specific debugging session, concurrency issue, or integration failure in "${proj.title}".`,
+      expectedKeywords: [proj.title, ...techList, 'debugging', 'trade-off', 'resolution', 'root cause', 'performance'],
+      modelAnswer: `A strong answer identifies a specific failure mode in "${proj.title}" (such as asynchronous state desync, schema mismatch, or CORS/network latency), detailing the diagnostic steps and the sustainable fix implemented.`,
+      resumeEvidence: `Project: ${proj.title}`,
+      rubricCriteria: [
+        { criterion: 'Problem Solving & Debugging', weight: 45, description: 'Methodical diagnostic approach.' },
+        { criterion: 'Technical Trade-off Evaluation', weight: 35, description: 'Explaining why the fix was appropriate.' },
+        { criterion: 'Engineering Rigor', weight: 20, description: 'Preventative measures and testing.' }
+      ]
+    });
+
+    // Validation & Error Handling
+    if (proj.description && /validation|error|extract/i.test(proj.description)) {
+      candidatePool.push({
+        category: 'technical',
+        question: `${candidateName}, you noted that "${proj.title}" includes input validation and error handling. How did you validate incoming payloads on both frontend and backend to protect system integrity?`,
+        contextHint: 'Explain client-side schema checks, server-side defensive validation, and HTTP status handling.',
+        expectedKeywords: ['validation', 'error handling', 'sanitization', 'HTTP status', 'try-catch', 'defensive'],
+        modelAnswer: 'Defensive validation requires client-side feedback for UX and strict server-side validation using schemas or regex to reject malformed requests before processing.',
+        resumeEvidence: `Project: ${proj.title} - ${proj.description.slice(0, 100)}`,
+        rubricCriteria: [
+          { criterion: 'Validation Strategy', weight: 40, description: 'Client vs server validation responsibilities.' },
+          { criterion: 'Security & Sanitization', weight: 35, description: 'Preventing injection and malformed inputs.' },
+          { criterion: 'Error Response Design', weight: 25, description: 'Clear error codes and recovery UX.' }
+        ]
+      });
+      // 3. Deployment, Caching & Scaling
+      candidatePool.push({
+        category: 'technical',
+        question: `${candidateName}, how did you package, deploy, or run "${proj.title}" during development or testing, and what steps did you take to ensure responsive performance?`,
+        contextHint: `Explain local server setup, build optimizations, containers, or caching in "${proj.title}".`,
+        expectedKeywords: [proj.title, 'deployment', 'build', 'performance', 'optimization', 'caching'],
+        modelAnswer: `Deployment of "${proj.title}" includes modular packaging, environment configuration, and asset optimization for fast load times and predictable runtime execution.`,
+        resumeEvidence: `Project: ${proj.title} (Deployment & Scaling)`,
+        rubricCriteria: [
+          { criterion: 'Deployment Strategy', weight: 40, description: 'Runtime setup and environment control.' },
+          { criterion: 'Performance Optimization', weight: 35, description: 'Caching, latency, and resource efficiency.' },
+          { criterion: 'Engineering Practicality', weight: 25, description: 'Practical operational considerations.' }
+        ]
+      });
+    }
+  });
+
+  // 2. Skill-grounded questions
+  skills.forEach((skill) => {
+    candidatePool.push({
+      category: 'technical',
+      question: `${candidateName}, you listed ${skill} as a core technical skill on your resume. How have you applied ${skill} in your projects, and what are its key advantages or pitfalls in production?`,
+      contextHint: `Provide a concrete scenario where you utilized ${skill} to solve a practical requirement.`,
+      expectedKeywords: [skill, 'application', 'production', 'performance', 'trade-offs', 'best practices'],
+      modelAnswer: `A thorough answer explains real-world application of ${skill}, discussing design patterns, memory or performance implications, and standard production pitfalls.`,
+      resumeEvidence: `Technical Skill: ${skill}`,
+      rubricCriteria: [
+        { criterion: `${skill} Competence`, weight: 40, description: `Hands-on understanding of ${skill}.` },
+        { criterion: 'Practical Application', weight: 35, description: 'Relating skill to concrete project work.' },
+        { criterion: 'Engineering Trade-offs', weight: 25, description: 'Awareness of limitations and alternatives.' }
+      ]
+    });
+  });
+
+  // 3. Experience / Internship questions
+  experience.forEach((exp) => {
+    candidatePool.push({
+      category: 'hr',
+      question: `${candidateName}, during your experience as a ${exp.role || 'Developer'} at ${exp.company || 'your internship'}, what was your most impactful engineering contribution and how did you collaborate with your team?`,
+      contextHint: 'Use the STAR method: Situation, Task, Action taken, and measurable Result.',
+      expectedKeywords: [exp.company || 'team', 'contribution', 'collaboration', 'STAR method', 'impact'],
+      modelAnswer: 'Articulate individual ownership using the STAR method, detailing the technical deliverables and positive team or product impact.',
+      resumeEvidence: `Experience: ${exp.role} at ${exp.company}`,
+      rubricCriteria: [
+        { criterion: 'Ownership & Impact', weight: 40, description: 'Demonstrating accountability and initiative.' },
+        { criterion: 'Collaboration', weight: 35, description: 'Effective teamwork and communication.' },
+        { criterion: 'STAR Articulation', weight: 25, description: 'Clear structured storytelling.' }
+      ]
+    });
+  });
+
+  // 4. Education / Foundational questions
+  education.forEach((ed) => {
+    candidatePool.push({
+      category: 'aptitude',
+      question: `${candidateName}, reflecting on your study of ${ed.degree || 'Computer Science'} at ${ed.institution || 'university'}, what foundational academic concept has proven most valuable in your hands-on coding work?`,
+      contextHint: 'Connect theoretical foundations (algorithms, databases, OS) to real-world code.',
+      expectedKeywords: ['foundations', 'algorithms', 'data structures', 'theory to practice'],
+      modelAnswer: 'Connect theoretical principles—such as algorithmic time complexity or database indexing—to day-to-day decisions in writing efficient software.',
+      resumeEvidence: `Education: ${ed.degree} from ${ed.institution}`,
+      rubricCriteria: [
+        { criterion: 'Foundational Grounding', weight: 40, description: 'Grasping fundamental principles.' },
+        { criterion: 'Practical Translation', weight: 35, description: 'Applying academic theory to software.' },
+        { criterion: 'Reflective Clarity', weight: 25, description: 'Thoughtful explanation.' }
+      ]
+    });
+  });
+
+  // Filter out any candidate questions already asked in this session
+  for (const item of candidatePool) {
+    const sig = createQuestionSignature(item.question);
+    if (!excludeSet.has(sig)) {
+      return {
+        id: `res_q_${Date.now()}_q${opts.questionNumber}_${Math.random().toString(36).slice(2, 7)}`,
+        category: item.category,
+        difficulty: opts.difficulty,
+        question: item.question,
+        contextHint: item.contextHint,
+        expectedKeywords: item.expectedKeywords,
+        modelAnswer: item.modelAnswer,
+        source: 'ai_generated',
+        isFollowUp: false,
+        resumeEvidence: item.resumeEvidence,
+        testCases: [],
+        rubricCriteria: item.rubricCriteria
+      };
+    }
+  }
+
+  return null;
+}
+
 // ─── Main Generator Engine ─────────────────────────────────────────────────────
 
 export const roleQuestionEngine = {
@@ -636,6 +798,14 @@ export const roleQuestionEngine = {
       ...pastAsked.map(q => createQuestionSignature(q)),
       ...(opts.excludeSignatures || [])
     ]);
+
+    // Priority 1: If resume data is provided, generate dynamically grounded in that resume
+    if (opts.resumeData) {
+      const resumeQuestion = generateResumeGroundedQuestion(opts, opts.category, excludeSet);
+      if (resumeQuestion) {
+        return resumeQuestion;
+      }
+    }
 
     // Match role blueprints or fall back to dynamic synthesis
     let rolePool: QuestionBlueprint[] = [];
@@ -738,6 +908,9 @@ export const roleQuestionEngine = {
     category: InterviewType;
     difficulty: QuestionDifficulty;
     questionCount: number;
+    resumeData?: ExtractedResumeData | null;
+    jobDescription?: string;
+    interviewFocus?: InterviewFocus;
   }): Question[] {
     const questions: Question[] = [];
     const usedSignatures: string[] = [];
@@ -751,7 +924,10 @@ export const roleQuestionEngine = {
         difficulty: params.difficulty,
         questionNumber: i,
         totalQuestions: params.questionCount,
-        excludeSignatures: usedSignatures
+        excludeSignatures: usedSignatures,
+        resumeData: params.resumeData,
+        jobDescription: params.jobDescription,
+        interviewFocus: params.interviewFocus
       });
 
       questions.push(q);

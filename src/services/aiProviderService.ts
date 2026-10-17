@@ -169,7 +169,10 @@ function buildLocalFallbackQuestion(
     language: params.language,
     questionNumber: params.questionNumber,
     totalQuestions: params.totalQuestions,
-    excludeSignatures
+    excludeSignatures,
+    resumeData: params.resumeData,
+    jobDescription: params.jobDescription,
+    interviewFocus: params.interviewFocus
   });
 }
 
@@ -181,6 +184,27 @@ function buildLocalFallbackEvaluation(
   const keywords = question.expectedKeywords || [];
   const lowerAnswer = answerText.toLowerCase();
   const wordCount = answerText.trim().split(/\s+/).filter(Boolean).length;
+  if (!answerText || !answerText.trim() || wordCount === 0) {
+    return {
+      score: 0,
+      accuracyScore: 0,
+      clarityScore: 0,
+      depthScore: 0,
+      relevanceScore: 0,
+      completenessScore: 0,
+      reasoningScore: 0,
+      matchedKeywords: [],
+      missedKeywords: (question.expectedKeywords || []).slice(0, 5),
+      feedback: 'No answer was submitted for this question. A score of 0 marks was recorded.',
+      keyStrengths: [],
+      keyImprovements: [
+        'Attempt every question during an interview — even a partial or conceptual answer demonstrates problem-solving ability.',
+        'Address the core concepts requested in the question prompt.'
+      ],
+      modelAnswer: question.modelAnswer || '',
+      suggestFollowUp: false
+    };
+  }
 
   const matched = keywords.filter(k => lowerAnswer.includes(k.toLowerCase()));
   const missed = keywords.filter(k => !lowerAnswer.includes(k.toLowerCase()));

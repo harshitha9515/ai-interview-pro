@@ -16,7 +16,11 @@ import {
   AlertCircle, 
   ChevronRight, 
   Check, 
+  CheckCircle,
   ShieldCheck,
+  ShieldAlert,
+  Eye,
+  Camera,
   Loader2 
 } from 'lucide-react';
 import { 
@@ -72,6 +76,7 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
   const [interviewMode, setInterviewMode] = useState<InterviewMode>(savedPrefs.mode || 'voice');
   const [durationMinutes, setDurationMinutes] = useState<number>(savedPrefs.durationMinutes || 15);
   const [isStarting, setIsStarting] = useState<boolean>(false);
+  const [proctoredMode, setProctoredMode] = useState<boolean>(savedPrefs.proctoredMode ?? true);
 
   // Voice & Language capability states
   const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
@@ -202,7 +207,8 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
       difficulty,
       questionCount,
       mode: interviewMode,
-      durationMinutes
+      durationMinutes,
+      proctoredMode
     });
 
     if (selectedLanguage !== settings.language) {
@@ -224,10 +230,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
         resumeData,
         jobDescriptionText,
         jobMatchAnalysis,
-        interviewFocus
+        interviewFocus,
+        isProctored: proctoredMode
       });
 
-      onNavigate('room', { sessionId });
+      onNavigate('room', { sessionId, proctoredMode: proctoredMode ? 'true' : 'false' });
     } catch (err: any) {
       setIsStarting(false);
       setErrorMessage(`Failed to start interview: ${err.message || 'Unknown error'}`);
@@ -712,6 +719,70 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
             )}
           </div>
 
+        </div>
+
+        {/* Proctored Interview Mode (Default ON) */}
+        <div className="glass-card rounded-2xl p-6 border border-emerald-500/30 bg-gradient-to-br from-emerald-950/20 via-slate-900/70 to-transparent space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
+                <ShieldCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  Proctored Placement Mode
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-emerald-950/90 text-emerald-300 border border-emerald-500/40 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    DEFAULT ON
+                  </span>
+                </h3>
+                <p className="text-[11px] text-slate-400">Company placement standard: verified camera & microphone device check, rules consent, and tab-switch telemetry</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-emerald-400 bg-emerald-950/80 px-3 py-1 rounded-full border border-emerald-500/30 hidden sm:inline-flex items-center gap-1.5">
+                <CheckCircle className="w-3.5 h-3.5" />
+                Active
+              </span>
+              <button
+                type="button"
+                onClick={() => setProctoredMode(p => !p)}
+                className={`relative w-12 h-6 rounded-full transition-all duration-300 ${
+                  proctoredMode
+                    ? 'bg-emerald-500 shadow-lg shadow-emerald-500/30'
+                    : 'bg-slate-700'
+                }`}
+                title="Proctored Assessment Mode Toggle"
+              >
+                <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform duration-300 ${
+                  proctoredMode ? 'translate-x-6' : ''
+                }`} />
+              </button>
+            </div>
+          </div>
+
+          {proctoredMode && (
+            <div className="space-y-3 animate-fadeIn">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
+                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="text-slate-300">Tab-switch detection</span>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
+                  <Camera className="w-3.5 h-3.5 text-violet-400" />
+                  <span className="text-slate-300">Camera monitoring</span>
+                </div>
+                <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/60 border border-slate-800 text-xs">
+                  <Mic className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-slate-300">Mic status tracking</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500 leading-relaxed">
+                When enabled, you'll see a rules & consent screen, a camera/mic device check, and optional fullscreen mode before the interview begins.
+                No video or audio is recorded. Tab-switch events are logged with warnings.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Error message */}

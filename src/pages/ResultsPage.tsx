@@ -38,6 +38,7 @@ import { getLanguageConfig } from '../config/languages';
 import { CATEGORY_CRITERIA_DOCS } from '../services/aiEvaluator';
 import { useToast } from '../context/ToastContext';
 import { pdfExportService } from '../services/pdfExportService';
+import { ProctoringResultsSection } from '../components/proctoring/ProctoringResultsSection';
 
 interface ResultsPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -521,6 +522,9 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ onNavigate, sessionId 
           </div>
         </div>
       </div>
+
+      {/* Feature: Proctored Assessment Integrity Report */}
+      <ProctoringResultsSection session={session} />
 
       {/* Documented Scoring Weights Breakdown Card */}
       <div className="glass-card rounded-2xl p-6 border border-slate-800 space-y-4 print:border-slate-300 print:bg-white print:text-black">

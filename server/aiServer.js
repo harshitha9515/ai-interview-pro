@@ -383,6 +383,99 @@ Note: testCases is only required for coding questions. For other types, use an e
     }
   }
 
+  // If resumeData is available, generate dynamically grounded in that resume
+  if (resumeData) {
+    const projects = (resumeData.projects || []).filter(p => p.title && p.title.trim().length > 3);
+    const skills = (resumeData.technicalSkills || []).concat(resumeData.toolsAndTechnologies || []).filter(s => s && s.trim());
+    const usedTexts = history.map(h => (h.question || '').toLowerCase());
+
+    const candidatePool = [];
+
+    for (const proj of projects) {
+      const techList = (proj.technologies || []).filter(t => t.trim());
+      const techStr = techList.length > 0 ? techList.join(', ') : 'your project stack';
+
+      // 1. Architecture & Data Flow
+      candidatePool.push({
+        q: `${candidateName}, on your resume you highlighted the "${proj.title}" project built with ${techStr}. Can you walk me through the system architecture and explain how data flows across the components?`,
+        hint: `Discuss the component breakdown, API endpoints, and data lifecycle in "${proj.title}".`,
+        keywords: [proj.title, ...techList, 'architecture', 'data flow', 'API', 'components', 'state'],
+        model: `In "${proj.title}", the architecture cleanly separates concerns. Requests originate from the frontend client, pass through validated endpoints, and execute domain logic against persistent storage, returning structured payloads.`,
+        evidence: `Project: ${proj.title} (${techStr})`
+      });
+
+      // 2. Technical Bug / Obstacle
+      candidatePool.push({
+        q: `${candidateName}, regarding your project "${proj.title}": what was the most difficult technical bug or architectural obstacle you encountered, and how did you resolve it?`,
+        hint: `Recall a specific debugging session, concurrency issue, or integration failure in "${proj.title}".`,
+        keywords: [proj.title, ...techList, 'debugging', 'trade-off', 'resolution', 'root cause', 'performance'],
+        model: `A strong answer identifies a specific failure mode in "${proj.title}", detailing diagnostic steps and the sustainable fix implemented.`,
+        evidence: `Project: ${proj.title}`
+      });
+
+      // 3. Testing, Reliability & Input Validation
+      candidatePool.push({
+        q: `${candidateName}, in your "${proj.title}" project, how did you handle error boundaries, edge cases, and automated validation for invalid user inputs?`,
+        hint: `Discuss unit testing, defensive checks, or schema validation in "${proj.title}".`,
+        keywords: [proj.title, 'validation', 'error handling', 'edge cases', 'testing', 'sanitization'],
+        model: `Defensive validation in "${proj.title}" handles invalid payloads gracefully on both client and server, logging errors without compromising application state.`,
+        evidence: `Project: ${proj.title} (Validation & Robustness)`
+      });
+
+      // 4. Deployment, Caching & Scaling
+      candidatePool.push({
+        q: `${candidateName}, how did you package, deploy, or run "${proj.title}" during development or testing, and what steps did you take to ensure responsive performance?`,
+        hint: `Explain local server setup, build optimizations, containers, or caching in "${proj.title}".`,
+        keywords: [proj.title, 'deployment', 'build', 'performance', 'optimization', 'caching'],
+        model: `Deployment of "${proj.title}" includes modular packaging, environment configuration, and asset optimization for fast load times and predictable runtime execution.`,
+        evidence: `Project: ${proj.title} (Deployment & Performance)`
+      });
+    }
+
+    // 5. Distinct Technical Skill deep-dives
+    for (const skill of skills) {
+      candidatePool.push({
+        q: `${candidateName}, you listed ${skill} as a core technical skill on your resume. How have you applied ${skill} in your projects, and what are its key advantages or pitfalls in production?`,
+        hint: `Provide a concrete scenario where you utilized ${skill} to solve a practical requirement.`,
+        keywords: [skill, 'application', 'production', 'performance', 'trade-offs'],
+        model: `A thorough answer explains real-world application of ${skill}, discussing design patterns, performance implications, and standard production pitfalls.`,
+        evidence: `Technical Skill: ${skill}`
+      });
+    }
+
+    // Find the first question in candidatePool whose exact title/skill has not been asked in this session
+    for (const item of candidatePool) {
+      const isAlreadyAsked = usedTexts.some(u => {
+        const itemShort = item.q.slice(0, 60).toLowerCase();
+        return u.includes(itemShort);
+      });
+
+      if (!isAlreadyAsked) {
+        return sendJSON(res, 200, {
+          question: {
+            id: `ai_${sessionId || 's'}_q${questionNumber}_${Date.now()}`,
+            category: category || 'technical',
+            difficulty,
+            question: item.q,
+            contextHint: item.hint,
+            expectedKeywords: item.keywords,
+            modelAnswer: item.model,
+            resumeEvidence: item.evidence,
+            source: 'ai_generated',
+            isFollowUp: false,
+            testCases: [],
+            rubricCriteria: [
+              { criterion: 'Technical Correctness', weight: 40, description: 'Accuracy and depth of technical reasoning.' },
+              { criterion: 'Hands-on Context', weight: 35, description: 'Relating response directly to practical project work.' },
+              { criterion: 'Clarity & Structure', weight: 25, description: 'Well-structured, concise explanation.' }
+            ]
+          },
+          provider: 'ai_generated'
+        });
+      }
+    }
+  }
+
   // Fallback: curated question bank tailored with candidate name and role
   const usedIds = history.map((_, i) => String(i));
   const question = pickCuratedQuestion(category, difficulty, role, usedIds);
@@ -414,23 +507,53 @@ async function handleEvaluateAnswer(req, res, body) {
   const provider = getEffectiveProvider();
   const wordCount = answerText.trim().split(/\s+/).filter(Boolean).length;
 
-  // Very short or empty answer — deterministic baseline evaluation
-  if (wordCount < 4) {
+  // Mandatory Rule: Completely empty, whitespace, or unanswered gets exactly 0 score
+  if (!answerText || !answerText.trim() || wordCount === 0) {
     sendJSON(res, 200, {
       evaluation: {
-        score: Math.max(10, Math.min(25, wordCount * 5)),
-        accuracyScore: wordCount === 0 ? 10 : 20,
-        clarityScore: wordCount === 0 ? 10 : 25,
-        depthScore: wordCount === 0 ? 10 : 15,
-        relevanceScore: wordCount === 0 ? 10 : 25,
-        completenessScore: wordCount === 0 ? 10 : 15,
-        reasoningScore: wordCount === 0 ? 10 : 15,
+        score: 0,
+        accuracyScore: 0,
+        clarityScore: 0,
+        depthScore: 0,
+        relevanceScore: 0,
+        completenessScore: 0,
+        reasoningScore: 0,
         matchedKeywords: [],
         missedKeywords: (question.expectedKeywords || []).slice(0, 4),
-        feedback: wordCount === 0
-          ? 'Question was skipped or no answer was submitted. Baseline score assigned.'
-          : 'Your answer was too brief. Please provide a more detailed explanation.',
-        keyStrengths: wordCount === 0 ? [] : ['Attempted response'],
+        feedback: 'No response was provided for this question. A score of 0 marks was recorded.',
+        keyStrengths: [],
+        keyImprovements: [
+          'Attempt every question during an interview — even a partial or conceptual answer demonstrates problem-solving ability.',
+          'Address the core concepts requested in the question prompt.'
+        ],
+        modelAnswer: question.modelAnswer || '',
+        suggestFollowUp: false,
+        followUpTopic: ''
+      },
+      source: 'unanswered_zero'
+    });
+    return;
+  }
+
+  // Very short filler or 1-2 word non-substantive attempt
+  if (wordCount < 4) {
+    const isAffirmativeOrFiller = /^(yes|no|ok|okay|i don'?t know|skip|pass|nothing|none|dunno|idk|na|not sure)$/i.test(answerText.trim());
+    const scoreVal = isAffirmativeOrFiller ? 0 : 5;
+    sendJSON(res, 200, {
+      evaluation: {
+        score: scoreVal,
+        accuracyScore: scoreVal,
+        clarityScore: scoreVal,
+        depthScore: 0,
+        relevanceScore: scoreVal,
+        completenessScore: 0,
+        reasoningScore: 0,
+        matchedKeywords: [],
+        missedKeywords: (question.expectedKeywords || []).slice(0, 4),
+        feedback: isAffirmativeOrFiller
+          ? 'Answer did not provide technical substance or answer the prompt. 0 marks recorded.'
+          : 'Your answer was too brief. Please elaborate with specific technical explanations.',
+        keyStrengths: scoreVal > 0 ? ['Attempted response'] : [],
         keyImprovements: [
           'Elaborate your answer with specific examples and technical details.',
           'Address the core concepts mentioned in the question prompt.'
@@ -527,7 +650,8 @@ async function handleGenerateFollowup(req, res, body) {
     followUpTopic,
     language = 'en-US',
     category = 'technical',
-    difficulty = 'intermediate'
+    difficulty = 'intermediate',
+    resumeData = null
   } = body;
 
   const provider = getEffectiveProvider();
@@ -583,25 +707,52 @@ Respond ONLY with this exact JSON:
     }
   }
 
-  // Fallback follow-up
+  // Dynamic context-aware fallback follow-up
+  let followUpText = `Can you elaborate further on your previous answer and provide a specific real-world example?`;
+  let hint = 'Use a concrete scenario from your experience or studies.';
+  let keywords = ['example', 'specific', 'scenario', 'real-world', 'implementation'];
+
+  const lowerAns = (candidateAnswer || '').toLowerCase();
+  const lowerQ = (originalQuestion || '').toLowerCase();
+
+  // If candidate mentioned API/endpoints
+  if (lowerAns.includes('api') || lowerAns.includes('request') || lowerAns.includes('call') || lowerAns.includes('fetch')) {
+    followUpText = `You mentioned making API requests. What response format and HTTP status codes did your backend return, and how did your frontend handle unexpected network failures?`;
+    hint = 'Discuss status codes (e.g. 200, 400, 500) and client-side error handling states.';
+    keywords = ['status code', 'HTTP', 'JSON', 'error handling', 'try-catch', 'response'];
+  } else if (lowerAns.includes('database') || lowerAns.includes('sql') || lowerAns.includes('schema') || lowerAns.includes('table')) {
+    followUpText = `Following up on your database design: how did you index or structure the tables to prevent bottlenecks under concurrent read/write operations?`;
+    hint = 'Explain primary/foreign keys, indexing strategies, or transaction isolation.';
+    keywords = ['indexing', 'schema', 'performance', 'query', 'keys', 'transactions'];
+  } else if (lowerAns.includes('react') || lowerAns.includes('state') || lowerAns.includes('component')) {
+    followUpText = `You mentioned state and component management. How did you ensure smooth re-renders and avoid unnecessary state synchronization issues?`;
+    hint = 'Discuss component lifting, hooks (useMemo, useCallback), or immutability.';
+    keywords = ['state', 're-render', 'hooks', 'performance', 'immutability'];
+  } else if (resumeData?.projects && resumeData.projects.length > 0) {
+    const p = resumeData.projects[0];
+    followUpText = `Connecting back to your "${p.title}" project: how did the concepts you just explained directly influence the way you implemented that system?`;
+    hint = `Tie your explanation to concrete code or design choices in ${p.title}.`;
+    keywords = [p.title, 'implementation', 'architecture', 'decision', 'result'];
+  }
+
   const followUp = {
     id: `followup_${Date.now()}`,
     category,
     difficulty,
-    question: `Can you elaborate further on your previous answer and provide a specific real-world example?`,
-    contextHint: 'Use a concrete scenario from your experience or studies.',
-    expectedKeywords: ['example', 'specific', 'scenario', 'real-world', 'implementation'],
-    modelAnswer: 'A strong follow-up should provide concrete evidence with measurable outcomes.',
-    source: 'predefined',
+    question: followUpText,
+    contextHint: hint,
+    expectedKeywords: keywords,
+    modelAnswer: 'A strong follow-up demonstrates deeper technical comprehension, linking high-level assertions to concrete engineering mechanisms and measurable results.',
+    source: 'ai_generated',
     isFollowUp: true,
     parentQuestionId: body.originalQuestionId || null,
     testCases: [],
     rubricCriteria: [
-      { criterion: 'Depth', weight: 50, description: 'Demonstrates deeper understanding.' },
-      { criterion: 'Clarity', weight: 50, description: 'Clear and precise explanation.' }
+      { criterion: 'Depth & Technical Nuance', weight: 50, description: 'Demonstrates deeper understanding of the specific subtopic.' },
+      { criterion: 'Clarity & Coherence', weight: 50, description: 'Clear, well-structured explanation responding to the follow-up.' }
     ]
   };
-  sendJSON(res, 200, { followUp, provider: 'predefined' });
+  sendJSON(res, 200, { followUp, provider: 'ai_generated' });
 }
 
 // POST /api/generate-report

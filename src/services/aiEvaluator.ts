@@ -297,7 +297,7 @@ export class AIEvaluatorService {
     });
 
     const categoryKeys = Object.keys(categoryMap);
-    const totalQuestions = evaluatedResponses.length;
+    const totalQuestions = Math.max(session.totalQuestions || 0, session.questions?.length || 0, evaluatedResponses.length, 1);
 
     // ─── 2. Calculate Documented Category Weights ──────────────────────────────
     const categoryWeights: CategoryWeightInfo[] = categoryKeys.map(catKey => {
@@ -316,8 +316,10 @@ export class AIEvaluatorService {
       };
     });
 
-    // Normalized overall score from documented weights
-    const totalWeightedScore = categoryWeights.reduce((acc, cw) => acc + cw.weightedContribution, 0);
+    // Normalized overall score from all questions in session
+    const totalWeightedScore = Math.round(
+      evaluatedResponses.reduce((sum, r) => sum + (r.evaluations?.score ?? 0), 0) / totalQuestions
+    );
     const overallScore = Math.min(100, Math.max(0, totalWeightedScore));
 
     const categoryScores: CategoryScore[] = categoryKeys.map(catKey => {
