@@ -139,10 +139,12 @@ class SpeechSynthesisService {
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.pitch = Math.max(0.6, Math.min(1.8, options.pitch ?? 1.0));
-    utterance.rate = Math.max(0.7, Math.min(1.5, options.rate ?? 1.0));
-    utterance.volume = Math.max(0.1, Math.min(1.0, options.volume ?? 1.0));
+    const rawUtteranceTexts = this.splitIntoChunks(cleanText);
+    if (rawUtteranceTexts.length === 0) {
+      this.setState('stopped');
+      callbacks?.onEnd?.();
+      return;
+    }
 
     // Multi-tier voice selection to guarantee every question is spoken
     let selectedVoice: SpeechSynthesisVoice | undefined;
@@ -180,56 +182,15 @@ class SpeechSynthesisService {
       ) || voices.find(v => v.lang.toLowerCase().startsWith('en')) || voices[0];
     }
 
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
-      // Critical fix: If fallback voice is in a different language than options.lang,
-      // align utterance.lang with voice.lang so Windows SAPI speech driver accepts it!
-      if (!selectedVoice.lang.toLowerCase().startsWith(langPrefix)) {
-        utterance.lang = selectedVoice.lang;
-      } else {
-        utterance.lang = options.lang || selectedVoice.lang;
-      }
-    } else if (options.lang) {
-      utterance.lang = options.lang;
+    const assignedVoice = selectedVoice;
+    let assignedLang = options.lang || (assignedVoice ? assignedVoice.lang : 'en-US');
+    if (assignedVoice && !assignedVoice.lang.toLowerCase().startsWith(langPrefix)) {
+      assignedLang = assignedVoice.lang;
     }
 
-    // Pin utterance to window to protect against Chromium V8 garbage collection bug
-    (window as any).__aiSpeechUtterance = utterance;
-
-    // Clear previous keep-alive timer
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = null;
-    }
-
-    utterance.onstart = () => {
-      this.setState('speaking');
-      callbacks?.onStart?.();
-
-      // Chromium 15-second speech synthesis freeze watchdog
-      this.keepAliveTimer = setInterval(() => {
-        if (!this.synth || this.state !== 'speaking') {
-          if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
-          return;
-        }
-        try {
-          this.synth.pause();
-          this.synth.resume();
-        } catch {
-          // ignore
-        }
-      }, 10000);
-    };
-
-    utterance.onpause = () => {
-      this.setState('paused');
-      callbacks?.onPause?.();
-    };
-
-    utterance.onresume = () => {
-      this.setState('speaking');
-      callbacks?.onResume?.();
-    };
+    let chunkIndex = 0;
+    let isCancelled = false;
+    let baseCharOffset = 0;
 
     const cleanup = () => {
       if (this.keepAliveTimer) {
@@ -241,42 +202,150 @@ class SpeechSynthesisService {
       this.setState('stopped');
     };
 
-    utterance.onend = () => {
-      cleanup();
-      callbacks?.onEnd?.();
-    };
-
-    utterance.onerror = (e) => {
-      cleanup();
-      // Ignore normal user cancellation or interrupted errors
-      if (e.error === 'interrupted' || e.error === 'canceled') {
+    const playNextChunk = () => {
+      if (isCancelled || !this.synth) {
+        cleanup();
         return;
       }
-      console.warn('[SpeechSynthesis] Utterance error:', e.error);
-      callbacks?.onError?.(e);
-    };
 
-    utterance.onboundary = (e: SpeechSynthesisEvent) => {
-      callbacks?.onBoundary?.(e.charIndex, (e as any).charLength);
-    };
+      if (chunkIndex >= rawUtteranceTexts.length) {
+        cleanup();
+        callbacks?.onEnd?.();
+        return;
+      }
 
-    this.currentUtterance = utterance;
+      const chunkText = rawUtteranceTexts[chunkIndex];
+      const utterance = new SpeechSynthesisUtterance(chunkText);
+      utterance.pitch = Math.max(0.6, Math.min(1.8, options.pitch ?? 1.0));
+      utterance.rate = Math.max(0.7, Math.min(1.5, options.rate ?? 1.0));
+      utterance.volume = Math.max(0.1, Math.min(1.0, options.volume ?? 1.0));
 
-    // Small delay prevents Chromium race condition where cancel() kills immediate speak()
-    setTimeout(() => {
-      try {
-        if (this.synth) {
-          if (this.synth.paused) {
-            this.synth.resume();
-          }
-          this.synth.speak(utterance);
+      if (assignedVoice) {
+        utterance.voice = assignedVoice;
+      }
+      utterance.lang = assignedLang;
+
+      // Pin active utterance to window to protect against Chromium V8 GC bug
+      (window as any).__aiSpeechUtterance = utterance;
+      this.currentUtterance = utterance;
+
+      const currentChunkOffset = baseCharOffset;
+
+      utterance.onstart = () => {
+        if (chunkIndex === 0) {
+          this.setState('speaking');
+          callbacks?.onStart?.();
         }
+      };
+
+      utterance.onpause = () => {
+        this.setState('paused');
+        callbacks?.onPause?.();
+      };
+
+      utterance.onresume = () => {
+        this.setState('speaking');
+        callbacks?.onResume?.();
+      };
+
+      utterance.onboundary = (e: SpeechSynthesisEvent) => {
+        callbacks?.onBoundary?.(currentChunkOffset + e.charIndex, (e as any).charLength);
+      };
+
+      utterance.onend = () => {
+        baseCharOffset += chunkText.length + 1;
+        chunkIndex++;
+        if (chunkIndex < rawUtteranceTexts.length) {
+          // Speak next sentence chunk seamlessly
+          setTimeout(playNextChunk, 20);
+        } else {
+          cleanup();
+          callbacks?.onEnd?.();
+        }
+      };
+
+      utterance.onerror = (e) => {
+        if (e.error === 'interrupted' || e.error === 'canceled') {
+          isCancelled = true;
+          cleanup();
+          return;
+        }
+        console.warn('[SpeechSynthesis] Utterance error on chunk:', e.error);
+        // If an individual chunk fails, attempt next chunk or conclude
+        chunkIndex++;
+        if (chunkIndex < rawUtteranceTexts.length) {
+          setTimeout(playNextChunk, 20);
+        } else {
+          cleanup();
+          callbacks?.onError?.(e);
+        }
+      };
+
+      try {
+        if (this.synth.paused) {
+          this.synth.resume();
+        }
+        this.synth.speak(utterance);
       } catch (err) {
         console.warn('[SpeechSynthesis] speak invocation failed:', err);
         cleanup();
         callbacks?.onError?.(err);
       }
+    };
+
+    // Small initial delay to ensure clean state after cancel
+    setTimeout(() => {
+      playNextChunk();
     }, 40);
+  }
+
+  /**
+   * Split long text into natural sentence/clause chunks under ~160 characters.
+   * This overcomes the browser Web Speech API cutoff bug on long sentences.
+   */
+  private splitIntoChunks(text: string): string[] {
+    if (!text || !text.trim()) return [];
+    
+    // Split on sentence terminators: . ? ! ; or newlines
+    const rawSentences = text.split(/([.?!;\n]+)/);
+    const sentences: string[] = [];
+    
+    for (let i = 0; i < rawSentences.length; i += 2) {
+      const sentence = rawSentences[i] || '';
+      const delimiter = rawSentences[i + 1] || '';
+      const combined = (sentence + delimiter).trim();
+      if (combined) {
+        sentences.push(combined);
+      }
+    }
+
+    if (sentences.length === 0) {
+      sentences.push(text.trim());
+    }
+
+    // Now ensure each chunk is <= 180 characters. If a sentence is longer, split on commas or spaces.
+    const resultChunks: string[] = [];
+    for (const item of sentences) {
+      if (item.length <= 180) {
+        resultChunks.push(item);
+      } else {
+        const subParts = item.split(/([,:]|\s+and\s+|\s+or\s+|\s+but\s+)/i);
+        let curr = '';
+        for (const part of subParts) {
+          if ((curr + part).length > 180 && curr.trim()) {
+            resultChunks.push(curr.trim());
+            curr = part;
+          } else {
+            curr += part;
+          }
+        }
+        if (curr.trim()) {
+          resultChunks.push(curr.trim());
+        }
+      }
+    }
+
+    return resultChunks.length > 0 ? resultChunks : [text.trim()];
   }
 
   public pause(): void {

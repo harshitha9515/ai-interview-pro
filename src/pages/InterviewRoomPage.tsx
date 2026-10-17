@@ -92,7 +92,7 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
     ttsService.unlockAudio();
     ttsService.loadVoices().then(voices => {
       setAvailableVoices(voices);
-      if (currentQuestion && settings.autoSpeakQuestions && !isPaused) {
+      if (currentQuestion && settings.autoSpeakQuestions && !isPaused && !ttsService.isSpeaking()) {
         repeatCurrentQuestion();
       }
     });
