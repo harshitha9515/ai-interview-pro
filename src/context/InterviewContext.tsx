@@ -7,7 +7,11 @@ import {
   ExperienceLevel, 
   QuestionDifficulty, 
   InterviewMode, 
-  AIStatus 
+  AIStatus,
+  ExtractedResumeData,
+  JobMatchAnalysis,
+  InterviewFocus,
+  FinalCandidateRecommendation
 } from '../types/interview';
 import { getMultilingualQuestions } from '../data/multilingualQuestionBank';
 import { storageService } from '../services/storage';
@@ -28,6 +32,10 @@ export interface StartInterviewParams {
   mode: InterviewMode;
   questionCount: number;
   durationMinutes: number;
+  resumeData?: ExtractedResumeData | null;
+  jobDescriptionText?: string;
+  jobMatchAnalysis?: JobMatchAnalysis | null;
+  interviewFocus?: InterviewFocus;
 }
 
 export interface AIProviderStatus {
@@ -41,6 +49,7 @@ interface InterviewContextType {
   currentSession: InterviewSession | null;
   currentQuestionIndex: number;
   currentQuestion: Question | null;
+  currentlySpokenText: string;
   aiStatus: AIStatus;
   setAiStatus: (status: AIStatus) => void;
   isPaused: boolean;
@@ -48,6 +57,14 @@ interface InterviewContextType {
   isSubmittingAnswer: boolean;
   isLoadingQuestion: boolean;
   aiProviderStatus: AIProviderStatus | null;
+  resumeData: ExtractedResumeData | null;
+  setResumeData: (data: ExtractedResumeData | null) => void;
+  jobDescriptionText: string;
+  setJobDescriptionText: (text: string) => void;
+  jobMatchAnalysis: JobMatchAnalysis | null;
+  setJobMatchAnalysis: (analysis: JobMatchAnalysis | null) => void;
+  interviewFocus: InterviewFocus;
+  setInterviewFocus: (focus: InterviewFocus) => void;
   startInterview: (params: StartInterviewParams) => string;
   submitAnswer: (answerText: string) => Promise<void>;
   skipQuestion: () => Promise<void>;
@@ -91,6 +108,20 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [isSubmittingAnswer, setIsSubmittingAnswer] = useState<boolean>(false);
   const [isLoadingQuestion, setIsLoadingQuestion] = useState<boolean>(false);
   const [aiProviderStatus, setAiProviderStatus] = useState<AIProviderStatus | null>(null);
+
+  // Resume & Job Description state hooks
+  const [resumeData, setResumeData] = useState<ExtractedResumeData | null>(() => {
+    return initialActive?.resumeData || null;
+  });
+  const [jobDescriptionText, setJobDescriptionText] = useState<string>(() => {
+    return initialActive?.jobDescriptionText || '';
+  });
+  const [jobMatchAnalysis, setJobMatchAnalysis] = useState<JobMatchAnalysis | null>(() => {
+    return initialActive?.jobMatchAnalysis || null;
+  });
+  const [interviewFocus, setInterviewFocus] = useState<InterviewFocus>(() => {
+    return initialActive?.interviewFocus || 'balanced';
+  });
   
   const questionStartTimeRef = useRef<number>(Date.now());
   const timerIntervalRef = useRef<any>(null);
@@ -164,6 +195,8 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     soundService.setEnabled(settings.enableSoundEffects);
   }, [settings.enableSoundEffects]);
 
+  const [currentlySpokenText, setCurrentlySpokenText] = useState<string>('');
+
   // ─── Auto-speak question when question changes ──────────────────────────────
   const lastSpokenQuestionIdRef = useRef<string | null>(null);
 
@@ -184,6 +217,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const speakQuestion = (text: string) => {
     if (!text || !text.trim()) return;
     setAiStatus('speaking');
+    setCurrentlySpokenText(text);
     const targetLang = currentSession?.language || settings.language || 'en-US';
 
     ttsService.speak(
@@ -195,9 +229,21 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         lang: targetLang
       },
       {
-        onStart: () => setAiStatus('speaking'),
-        onEnd: () => setAiStatus('listening'),
-        onError: () => setAiStatus('listening')
+        onStart: () => {
+          setAiStatus('speaking');
+          setCurrentlySpokenText(text);
+        },
+        onChunk: (chunkText) => {
+          setCurrentlySpokenText(chunkText);
+        },
+        onEnd: () => {
+          setAiStatus('listening');
+          setCurrentlySpokenText('');
+        },
+        onError: () => {
+          setAiStatus('listening');
+          setCurrentlySpokenText('');
+        }
       }
     );
   };
@@ -220,7 +266,10 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         questionNumber,
         totalQuestions: session.totalQuestions,
         history: questionHistoryRef.current,
-        sessionId: session.id
+        sessionId: session.id,
+        resumeData: session.resumeData,
+        jobDescription: session.jobDescriptionText,
+        interviewFocus: session.interviewFocus
       });
 
       // Track history for deduplication
@@ -243,6 +292,10 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     questionHistoryRef.current = [];
 
     const candidateName = params.candidateName?.trim() || 'Candidate';
+    const effectiveResumeData = params.resumeData !== undefined ? params.resumeData : resumeData;
+    const effectiveJD = params.jobDescriptionText !== undefined ? params.jobDescriptionText : jobDescriptionText;
+    const effectiveJobMatch = params.jobMatchAnalysis !== undefined ? params.jobMatchAnalysis : jobMatchAnalysis;
+    const effectiveFocus = params.interviewFocus || interviewFocus;
 
     // Generate initial questions strictly tailored to candidate name, role, and experience without repetition
     const seededQuestions = roleQuestionEngine.generateSessionQuestions({
@@ -270,7 +323,11 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       totalQuestions: params.questionCount,
       status: 'in_progress',
       questions: seededQuestions,
-      responses: []
+      responses: [],
+      resumeData: effectiveResumeData || undefined,
+      jobDescriptionText: effectiveJD || undefined,
+      jobMatchAnalysis: effectiveJobMatch || undefined,
+      interviewFocus: effectiveFocus
     };
 
     setCurrentSession(newSession);
@@ -394,7 +451,9 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         answerText,
         timeSpentSeconds,
         language: currentSession.language,
-        sessionContext
+        sessionContext,
+        resumeData: currentSession.resumeData,
+        jobDescription: currentSession.jobDescriptionText
       });
       evaluation = evalResult.evaluation;
     } catch (err) {
@@ -452,7 +511,8 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           followUpTopic: evaluation.followUpTopic || 'deeper understanding',
           language: currentSession.language,
           category: currentQuestion.category,
-          difficulty: currentQuestion.difficulty
+          difficulty: currentQuestion.difficulty,
+          resumeData: currentSession.resumeData
         });
         if (followUpResult?.followUp) {
           followUpQuestion = followUpResult.followUp;
@@ -546,7 +606,9 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     try {
       summary = await aiProviderService.generateReport({
         session: currentSession,
-        responses: currentSession.responses
+        responses: currentSession.responses,
+        resumeData: currentSession.resumeData,
+        jobDescription: currentSession.jobDescriptionText
       });
     } catch (err) {
       console.warn('[InterviewContext] Report generation error, using local evaluator:', err);
@@ -565,12 +627,27 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     }
     totalScore = Math.min(100, Math.max(0, totalScore));
 
+    // Generate Final Evidence-Based Recommendation
+    let recommendation: FinalCandidateRecommendation | undefined;
+    try {
+      const recResult = await aiProviderService.generateFinalRecommendation({
+        session: { ...currentSession, overallScore: totalScore },
+        responses: currentSession.responses,
+        resumeData: currentSession.resumeData,
+        jobDescription: currentSession.jobDescriptionText
+      });
+      recommendation = recResult.recommendation;
+    } catch (err) {
+      console.warn('[InterviewContext] Final recommendation error:', err);
+    }
+
     const finalSession: InterviewSession = {
       ...currentSession,
       completedAt: new Date().toISOString(),
       status: 'completed',
       overallScore: totalScore,
-      feedbackSummary: summary
+      feedbackSummary: summary,
+      finalRecommendation: recommendation
     };
 
     setCurrentSession(finalSession);
@@ -608,6 +685,7 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       currentSession,
       currentQuestionIndex,
       currentQuestion,
+      currentlySpokenText,
       aiStatus,
       setAiStatus,
       isPaused,
@@ -615,6 +693,14 @@ export const InterviewProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       isSubmittingAnswer,
       isLoadingQuestion,
       aiProviderStatus,
+      resumeData,
+      setResumeData,
+      jobDescriptionText,
+      setJobDescriptionText,
+      jobMatchAnalysis,
+      setJobMatchAnalysis,
+      interviewFocus,
+      setInterviewFocus,
       startInterview,
       submitAnswer,
       skipQuestion,

@@ -44,6 +44,7 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
     currentSession,
     currentQuestionIndex,
     currentQuestion,
+    currentlySpokenText,
     aiStatus,
     setAiStatus,
     isPaused,
@@ -347,6 +348,17 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
                 <span>Candidate:</span>
                 <span className="text-white font-extrabold">{currentSession.candidateName || currentSession.userName || 'Candidate'}</span>
               </span>
+              {currentSession.resumeData && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                  <FileText className="w-2.5 h-2.5" />
+                  <span>Resume Driven</span>
+                </span>
+              )}
+              {currentSession.interviewFocus && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-500/30 uppercase">
+                  Focus: {currentSession.interviewFocus.replace(/_/g, ' ')}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-400">
               Question {currentQNum} of {totalQCount} • Experience: <span className="capitalize text-cyan-300 font-semibold">{currentSession.experienceLevel}</span> • Difficulty: <span className="capitalize text-slate-300">{currentQuestion.difficulty}</span>
@@ -471,7 +483,7 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
           </div>
 
           {/* Central Holographic Avatar */}
-          <div className="py-6 my-auto">
+          <div className="py-4 my-auto w-full flex flex-col items-center">
             <AIAvatar 
               status={aiStatus} 
               size="lg" 
@@ -481,6 +493,18 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
                 repeatCurrentQuestion();
               }}
             />
+            {/* Live Real-time Spoken Subtitles Caption */}
+            {aiStatus === 'speaking' && (
+              <div className="mt-3 w-full max-w-sm px-4 py-2.5 rounded-2xl bg-slate-900/90 border border-cyan-500/40 text-center shadow-lg shadow-cyan-950/50 animate-fadeIn">
+                <div className="flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-cyan-400 mb-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                  <span>Interviewer Speaking:</span>
+                </div>
+                <p className="text-xs text-white font-medium leading-relaxed italic">
+                  "{currentlySpokenText || currentQuestion.question}"
+                </p>
+              </div>
+            )}
             {!voiceCheck.supported && (
               <div className="mt-3 text-[10px] px-3 py-1 rounded-xl bg-amber-950/70 border border-amber-600/40 text-amber-300 flex items-center justify-center gap-1.5 max-w-xs text-center mx-auto">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
@@ -539,6 +563,12 @@ export const InterviewRoomPage: React.FC<InterviewRoomPageProps> = ({ onNavigate
                 ) : (
                   <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-900 text-slate-400 border border-slate-700">
                     📚 Curated
+                  </span>
+                )}
+                {currentSession.resumeData && (
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40">
+                    <FileText className="w-2.5 h-2.5" />
+                    Resume Context
                   </span>
                 )}
                 {/* Rubric weights */}

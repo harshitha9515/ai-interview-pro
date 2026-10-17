@@ -37,6 +37,7 @@ import { useSettings } from '../context/SettingsContext';
 import { sttService } from '../services/speechRecognition';
 import { ttsService } from '../services/speechSynthesis';
 import { storageService } from '../services/storage';
+import { ResumeUploadAndAnalysis } from '../components/resume/ResumeUploadAndAnalysis';
 
 interface SetupPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -44,7 +45,17 @@ interface SetupPageProps {
 }
 
 export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType }) => {
-  const { startInterview } = useInterview();
+  const { 
+    startInterview, 
+    resumeData, 
+    setResumeData, 
+    jobDescriptionText, 
+    setJobDescriptionText, 
+    jobMatchAnalysis, 
+    setJobMatchAnalysis, 
+    interviewFocus, 
+    setInterviewFocus 
+  } = useInterview();
   const { settings, updateSettings } = useSettings();
 
   // Form states loaded from persisted preferences
@@ -209,7 +220,11 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
         difficulty,
         mode: interviewMode,
         questionCount,
-        durationMinutes
+        durationMinutes,
+        resumeData,
+        jobDescriptionText,
+        jobMatchAnalysis,
+        interviewFocus
       });
 
       onNavigate('room', { sessionId });
@@ -244,6 +259,26 @@ export const SetupPage: React.FC<SetupPageProps> = ({ onNavigate, initialType })
 
       <form onSubmit={handleStart} className="space-y-8">
         
+        {/* Dedicated Resume Upload & Analysis Section (Feature 1, 2, 3) */}
+        <div className="glass-card rounded-2xl p-6 border border-cyan-500/30 bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-cyan-950/20 shadow-xl shadow-cyan-950/20">
+          <ResumeUploadAndAnalysis
+            resumeData={resumeData}
+            onResumeChange={setResumeData}
+            jobDescriptionText={jobDescriptionText}
+            onJobDescriptionChange={setJobDescriptionText}
+            jobMatchAnalysis={jobMatchAnalysis}
+            onJobMatchChange={setJobMatchAnalysis}
+            interviewFocus={interviewFocus}
+            onInterviewFocusChange={setInterviewFocus}
+            onCandidateNameExtracted={(name) => {
+              if (name && name !== 'Candidate') {
+                setCandidateName(name);
+              }
+            }}
+            targetRole={isCustomRole ? customRoleInput : targetRole}
+          />
+        </div>
+
         {/* Step 1: Mandatory Candidate Identification */}
         <div className="glass-card rounded-2xl p-6 border border-cyan-500/40 bg-gradient-to-br from-cyan-950/20 via-slate-900/70 to-transparent space-y-4 shadow-xl shadow-cyan-950/20">
           <div className="flex items-center justify-between flex-wrap gap-2">

@@ -101,6 +101,7 @@ class SpeechSynthesisService {
       onPause?: () => void;
       onResume?: () => void;
       onBoundary?: (charIndex: number, charLength?: number) => void;
+      onChunk?: (chunkText: string, chunkIndex: number, totalChunks: number) => void;
     }
   ): void {
     if (!this.synth) {
@@ -236,6 +237,7 @@ class SpeechSynthesisService {
           this.setState('speaking');
           callbacks?.onStart?.();
         }
+        callbacks?.onChunk?.(chunkText, chunkIndex, rawUtteranceTexts.length);
       };
 
       utterance.onpause = () => {

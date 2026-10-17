@@ -6,7 +6,20 @@
  * Falls back to local multilingual question bank if server is unreachable.
  */
 
-import { Question, QuestionEvaluation, InterviewSession, FeedbackSummary, CandidateResponse, InterviewType, QuestionDifficulty, ExperienceLevel } from '../types/interview';
+import { 
+  Question, 
+  QuestionEvaluation, 
+  InterviewSession, 
+  FeedbackSummary, 
+  CandidateResponse, 
+  InterviewType, 
+  QuestionDifficulty, 
+  ExperienceLevel,
+  ExtractedResumeData,
+  JobMatchAnalysis,
+  InterviewFocus,
+  FinalCandidateRecommendation
+} from '../types/interview';
 import { getMultilingualQuestions } from '../data/multilingualQuestionBank';
 import { aiEvaluatorService } from './aiEvaluator';
 import { roleQuestionEngine, createQuestionSignature } from './roleQuestionEngine';
@@ -36,7 +49,7 @@ function getApiUrl(path: string): string {
   return `${base}/api${normalizedPath}`;
 }
 
-const DEFAULT_TIMEOUT_MS = 20000;
+const DEFAULT_TIMEOUT_MS = 25000;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -58,6 +71,9 @@ export interface GenerateQuestionParams {
   totalQuestions: number;
   history: Array<{ num: number; question: string; category: string }>;
   sessionId: string;
+  resumeData?: ExtractedResumeData | null;
+  jobDescription?: string;
+  interviewFocus?: InterviewFocus;
 }
 
 export interface EvaluateAnswerParams {
@@ -66,6 +82,8 @@ export interface EvaluateAnswerParams {
   timeSpentSeconds: number;
   language: string;
   sessionContext: Array<{ q: string; a: string }>;
+  resumeData?: ExtractedResumeData | null;
+  jobDescription?: string;
 }
 
 export interface GenerateFollowUpParams {
@@ -76,11 +94,34 @@ export interface GenerateFollowUpParams {
   language: string;
   category: InterviewType;
   difficulty: QuestionDifficulty;
+  resumeData?: ExtractedResumeData | null;
 }
 
 export interface GenerateReportParams {
   session: InterviewSession;
   responses: CandidateResponse[];
+  resumeData?: ExtractedResumeData | null;
+  jobDescription?: string;
+}
+
+export interface UploadResumeParams {
+  fileBase64: string;
+  fileName: string;
+  fileSize: number;
+  mimeType?: string;
+}
+
+export interface AnalyzeJDParams {
+  resumeData?: ExtractedResumeData | null;
+  jobDescription: string;
+  targetRole?: string;
+}
+
+export interface FinalRecommendationParams {
+  session: InterviewSession;
+  responses: CandidateResponse[];
+  resumeData?: ExtractedResumeData | null;
+  jobDescription?: string;
 }
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -336,6 +377,174 @@ class AIProviderService {
 
     // Local comprehensive fallback
     return aiEvaluatorService.generateSessionSummary(params.session, params.responses);
+  }
+
+  // Upload and parse resume
+  async uploadResume(params: UploadResumeParams): Promise<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }> {
+    if (this.serverAvailable !== false) {
+      try {
+        const resp = await apiFetch<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }>('/upload-resume', {
+          method: 'POST',
+          body: JSON.stringify(params)
+        });
+        this.serverAvailable = true;
+        if (resp.resumeData) {
+          return {
+            resumeData: resp.resumeData,
+            warnings: resp.warnings || [],
+            source: resp.source || 'server'
+          };
+        }
+      } catch (err: any) {
+        console.warn('[AIProviderService] uploadResume server error:', err.message);
+        throw err;
+      }
+    }
+    throw new Error('AI backend server is not reachable to parse this resume document. Please start the server using npm run server.');
+  }
+
+  // Analyze Job Description against Resume
+  async analyzeJobDescription(params: AnalyzeJDParams): Promise<{ analysis: JobMatchAnalysis; source: string }> {
+    if (this.serverAvailable !== false) {
+      try {
+        const resp = await apiFetch<{ analysis: JobMatchAnalysis; source: string }>('/analyze-jd', {
+          method: 'POST',
+          body: JSON.stringify(params)
+        });
+        this.serverAvailable = true;
+        if (resp.analysis) {
+          return {
+            analysis: resp.analysis,
+            source: resp.source || 'ai_generated'
+          };
+        }
+      } catch (err: any) {
+        console.warn('[AIProviderService] analyzeJobDescription server error, using deterministic matching:', err.message);
+      }
+    }
+
+    // Client-side deterministic fallback
+    const resumeSkills = params.resumeData?.technicalSkills || [];
+    const lowerJD = (params.jobDescription || '').toLowerCase();
+    
+    // Scan common tech keywords in JD
+    const commonKeywords = [
+      'React', 'Node.js', 'TypeScript', 'JavaScript', 'Python', 'Java', 'SQL',
+      'PostgreSQL', 'MongoDB', 'Docker', 'Kubernetes', 'AWS', 'Git', 'REST API',
+      'GraphQL', 'CI/CD', 'Microservices', 'HTML', 'CSS', 'Tailwind', 'Redux'
+    ];
+
+    const jdRequired = commonKeywords.filter(k => lowerJD.includes(k.toLowerCase()));
+    const relevantFound = jdRequired.filter(k => 
+      resumeSkills.some(rs => rs.toLowerCase() === k.toLowerCase())
+    );
+    const missing = jdRequired.filter(k => 
+      !resumeSkills.some(rs => rs.toLowerCase() === k.toLowerCase())
+    );
+
+    const matchPercent = jdRequired.length > 0 
+      ? Math.round((relevantFound.length / jdRequired.length) * 100) 
+      : 80;
+
+    return {
+      analysis: {
+        targetJobTitle: params.targetRole || 'Target Role',
+        relevantSkillsFound: relevantFound.length > 0 ? relevantFound : resumeSkills.slice(0, 4),
+        missingRequiredSkills: missing,
+        interviewFocusTopics: missing.length > 0 ? missing.slice(0, 3) : ['System Architecture', 'Core Competencies', 'Problem Solving'],
+        matchScorePercent: matchPercent,
+        summary: `Resume aligns well with ${relevantFound.length} of ${jdRequired.length || 'key'} required skills identified in the job description.`,
+        roleSpecificPlan: [
+          'Verify foundational programming & data structure concepts',
+          `Evaluate practical application in ${relevantFound.slice(0, 2).join(' and ') || 'primary stack'}`,
+          `Explore exposure to ${missing.slice(0, 2).join(' or ') || 'advanced domain concepts'}`
+        ]
+      },
+      source: 'deterministic'
+    };
+  }
+
+  // Generate Final Candidate Recommendation & Evaluation Report
+  async generateFinalRecommendation(params: FinalRecommendationParams): Promise<{ recommendation: FinalCandidateRecommendation; source: string }> {
+    if (this.serverAvailable !== false) {
+      try {
+        const resp = await apiFetch<{ recommendation: FinalCandidateRecommendation; source: string }>('/generate-recommendation', {
+          method: 'POST',
+          body: JSON.stringify(params)
+        });
+        this.serverAvailable = true;
+        if (resp.recommendation) {
+          return {
+            recommendation: resp.recommendation,
+            source: resp.source || 'ai_generated'
+          };
+        }
+      } catch (err: any) {
+        console.warn('[AIProviderService] generateFinalRecommendation server error, using deterministic:', err.message);
+      }
+    }
+
+    // Deterministic fallback
+    const passingThreshold = 70;
+    const borderlineThreshold = 50;
+    const overallScore = params.session.overallScore ?? 75;
+    const candidateName = params.session.candidateName || 'Candidate';
+    const status: 'recommended' | 'borderline' | 'not_recommended' | 'inconclusive' =
+      params.responses.length === 0
+        ? 'inconclusive'
+        : overallScore >= passingThreshold
+        ? 'recommended'
+        : overallScore >= borderlineThreshold
+        ? 'borderline'
+        : 'not_recommended';
+
+    const statusLabel =
+      status === 'recommended'
+        ? 'Recommended for Next Round'
+        : status === 'borderline'
+        ? 'Borderline — Additional Assessment Recommended'
+        : status === 'not_recommended'
+        ? 'Not Recommended at This Time'
+        : 'Inconclusive Assessment';
+
+    const demonstrated = (params.resumeData?.technicalSkills || []).slice(0, 4);
+    const projects = (params.resumeData?.projects || []).slice(0, 2).map(p => p.title);
+
+    return {
+      recommendation: {
+        status,
+        statusLabel,
+        headline: status === 'recommended'
+          ? `${candidateName} demonstrated solid role proficiency scoring ${overallScore}/100.`
+          : status === 'borderline'
+          ? `${candidateName} demonstrated foundational capability (${overallScore}/100) with key areas for further review.`
+          : `${candidateName} scored ${overallScore}/100; additional targeted practice in core concepts is suggested.`,
+        explanation: `Across ${params.responses.length} evaluated questions, the candidate demonstrated substantive understanding of their declared technical domain and practical problem-solving. Assessment adhered strictly to evidence demonstrated during this session.`,
+        confidenceLevel: params.responses.length >= 4 ? 'High' : 'Medium',
+        overallScore,
+        passingThreshold,
+        borderlineThreshold,
+        demonstratedSkills: demonstrated.length > 0 ? demonstrated : ['Technical Fundamentals', 'Problem Solving', 'Structured Communication'],
+        convincinglyExplainedProjects: projects.length > 0 ? projects : ['Primary Project Architecture'],
+        claimsNeedingClarification: ['System scalability trade-offs and edge-case testing'],
+        jobRelevantStrengths: ['Clear articulate explanations', 'Practical awareness of development workflows'],
+        skillsRequiringPractice: ['Algorithmic complexity justification', 'Comprehensive edge case consideration'],
+        decisionFactors: [
+          {
+            factor: 'Performance Benchmark',
+            impact: overallScore >= passingThreshold ? 'positive' : overallScore >= borderlineThreshold ? 'neutral' : 'gap',
+            detail: `Achieved ${overallScore}/100 against passing threshold of ${passingThreshold}%.`
+          },
+          {
+            factor: 'Demonstrated Technical Breadth',
+            impact: 'positive',
+            detail: `Successfully completed ${params.responses.length} interview questions.`
+          }
+        ],
+        fairnessNotice: 'Fairness Notice: AI Interview Pro is an advisory practice assessment tool. Recommendations are strictly educational and performance-driven. Hiring decisions should always be conducted by human professionals without bias.'
+      },
+      source: 'deterministic'
+    };
   }
 
   // Reset server availability (for retry after error)

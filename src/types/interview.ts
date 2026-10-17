@@ -139,6 +139,112 @@ export interface InterviewSession {
   questions: Question[];
   responses: CandidateResponse[];
   feedbackSummary?: FeedbackSummary;
+  // Feature 1, 2, 3: Resume & Job Description Integration
+  resumeData?: ExtractedResumeData;
+  jobDescriptionText?: string;
+  jobMatchAnalysis?: JobMatchAnalysis;
+  interviewFocus?: InterviewFocus;
+  finalRecommendation?: FinalCandidateRecommendation;
+}
+
+// ─── Resume Analysis Types ───────────────────────────────────────────────────
+
+export interface ResumeProject {
+  title: string;
+  description: string;
+  technologies: string[];
+  roleOrContribution?: string;
+}
+
+export interface ResumeExperience {
+  company: string;
+  role: string;
+  duration?: string;
+  description?: string;
+  technologies?: string[];
+}
+
+export interface ResumeEducation {
+  institution: string;
+  degree: string;
+  fieldOfStudy?: string;
+  year?: string;
+  scoreOrGrade?: string;
+}
+
+export interface ExtractedResumeData {
+  id?: string;
+  fileName: string;
+  fileSize: number;
+  extractedAt: string;
+  rawTextPreview?: string;
+  candidateName: string;
+  email?: string;
+  phone?: string;
+  location?: string;
+  linkedinUrl?: string;
+  githubUrl?: string;
+  summary?: string;
+  education: ResumeEducation[];
+  technicalSkills: string[];
+  softSkills: string[];
+  projects: ResumeProject[];
+  experience: ResumeExperience[];
+  certifications: string[];
+  toolsAndTechnologies: string[];
+  achievements: string[];
+  isScannedOrNoText?: boolean;
+  warnings?: string[];
+}
+
+// ─── Job Description & Match Types ──────────────────────────────────────────
+
+export interface JobMatchAnalysis {
+  targetJobTitle?: string;
+  relevantSkillsFound: string[];
+  missingRequiredSkills: string[]; // Clearly distinguished: not evident on resume
+  interviewFocusTopics: string[];
+  matchScorePercent: number; // 0 - 100
+  summary: string;
+  roleSpecificPlan: string[];
+}
+
+export type InterviewFocus = 
+  | 'balanced' 
+  | 'resume_based' 
+  | 'technical_skills' 
+  | 'project_deep_dive' 
+  | 'hr_behavioral' 
+  | 'job_description';
+
+// ─── Final Candidate Recommendation (Feature 6) ──────────────────────────────
+
+export type FinalRecommendationStatus = 
+  | 'recommended' 
+  | 'borderline' 
+  | 'not_recommended' 
+  | 'inconclusive';
+
+export interface FinalCandidateRecommendation {
+  status: FinalRecommendationStatus;
+  statusLabel: string;
+  headline: string;
+  explanation: string;
+  confidenceLevel: 'High' | 'Medium' | 'Low';
+  overallScore: number;
+  passingThreshold: number; // Configurable threshold (e.g., 75)
+  borderlineThreshold: number; // Configurable (e.g., 55)
+  demonstratedSkills: string[];
+  convincinglyExplainedProjects: string[];
+  claimsNeedingClarification: string[];
+  jobRelevantStrengths: string[];
+  skillsRequiringPractice: string[];
+  decisionFactors: {
+    factor: string;
+    impact: 'positive' | 'neutral' | 'gap';
+    detail: string;
+  }[];
+  fairnessNotice: string;
 }
 
 export interface UserSettings {

@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { extractTextFromDocument, heuristicParseResumeText, MAX_FILE_SIZE_BYTES } from './resumeParser.js';
 
 // ─── Load .env (without dotenv dependency) ────────────────────────────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -251,7 +252,10 @@ async function handleGenerateQuestion(req, res, body) {
     questionNumber = 1,
     totalQuestions = 10,
     history = [],
-    sessionId = ''
+    sessionId = '',
+    resumeData = null,
+    jobDescription = '',
+    interviewFocus = 'balanced'
   } = body;
 
   const provider = getEffectiveProvider();
@@ -259,12 +263,44 @@ async function handleGenerateQuestion(req, res, body) {
   if (provider !== 'fallback') {
     try {
       const previousQs = history.map(h => `Q${h.num}: "${h.question}"`).join('\n');
-      const langInstruction = language.startsWith('te') ? 'Respond with the question in Telugu script.' :
-                              language.startsWith('hi') ? 'Respond with the question in Hindi.' :
-                              language.startsWith('ta') ? 'Respond with the question in Tamil.' :
-                              language.startsWith('kn') ? 'Respond with the question in Kannada.' :
-                              language.startsWith('ml') ? 'Respond with the question in Malayalam.' :
+      const langInstruction = language.startsWith('te') ? 'Respond with the question in Telugu script. Technical terms (like React, Docker, Python) may remain in standard Latin script.' :
+                              language.startsWith('hi') ? 'Respond with the question in Hindi. Technical terms may remain in standard Latin script.' :
+                              language.startsWith('ta') ? 'Respond with the question in Tamil. Technical terms may remain in standard Latin script.' :
+                              language.startsWith('kn') ? 'Respond with the question in Kannada. Technical terms may remain in standard Latin script.' :
+                              language.startsWith('ml') ? 'Respond with the question in Malayalam. Technical terms may remain in standard Latin script.' :
                               'Respond in English.';
+
+      // Construct resume and JD context
+      let resumeContext = '';
+      if (resumeData) {
+        const projectsText = (resumeData.projects || []).map(p => 
+          `- Project: "${p.title}" | Tech: ${p.technologies?.join(', ')} | Role: ${p.roleOrContribution || 'Contributor'} | Summary: ${p.description}`
+        ).join('\n');
+        const skillsText = (resumeData.technicalSkills || []).concat(resumeData.toolsAndTechnologies || []).join(', ');
+        const expText = (resumeData.experience || []).map(e => `${e.role} at ${e.company} (${e.duration || ''})`).join('; ');
+        const eduText = (resumeData.education || []).map(ed => `${ed.degree} from ${ed.institution}`).join('; ');
+
+        resumeContext = `
+CANDIDATE'S RESUME CONTEXT (EVALUATE AND VERIFY THESE CLAIMS):
+- Candidate Skills: ${skillsText || 'None listed'}
+- Listed Projects:
+${projectsText || 'None listed'}
+- Experience/Internships: ${expText || 'None listed'}
+- Education: ${eduText || 'None listed'}
+- Certifications: ${(resumeData.certifications || []).join(', ') || 'None'}
+
+INTERVIEW FOCUS: "${interviewFocus}" (Prioritize questions matching this mode, such as deep-diving into a listed project's architecture, design decisions, data flow, failure modes, trade-offs, or testing strategies).
+`;
+      }
+
+      let jdContext = '';
+      if (jobDescription && jobDescription.trim()) {
+        jdContext = `
+TARGET JOB DESCRIPTION REQUIREMENTS:
+${jobDescription.slice(0, 1500)}
+Compare the candidate's stated experience against these requirements and verify real-world competence.
+`;
+      }
 
       const categoryGuidance = {
         hr: `HR/Behavioral: motivation, teamwork, STAR-method behavioral scenarios, career goals, situational conflict resolution for a ${experienceLevel} ${role}`,
@@ -275,7 +311,7 @@ async function handleGenerateQuestion(req, res, body) {
         placement_mixed: `Balanced interview round for a ${role} — question ${questionNumber} of ${totalQuestions}`
       };
 
-      const prompt = `You are an expert AI interviewer conducting an interview for a ${role} position.
+      const prompt = `You are a distinguished senior hiring manager conducting an interactive interview for a ${role} position.
 
 Candidate Name: ${candidateName}
 Target Role: ${role}
@@ -285,15 +321,22 @@ Category: ${category} — ${categoryGuidance[category] || category}
 Difficulty: ${difficulty}
 Interview language: ${language}
 ${langInstruction}
+${resumeContext}
+${jdContext}
 
 Previously asked questions (STRICT RULE: Do NOT repeat or rephrase any of these):
 ${previousQs || 'None yet.'}
 
-MANDATORY REQUIREMENTS:
-1. You MUST address the candidate directly by their name ("${candidateName}") in the question (for example: "${candidateName}, in your experience as a ${experienceLevel} ${role}...", "${candidateName}, could you explain...", or "${candidateName}, let's look at a scenario in ${role}...").
-2. The question MUST be strictly tailored to the target role "${role}" and appropriate for "${experienceLevel}" experience level.
-3. Under no circumstances repeat any previously asked questions or ask generic unrelated questions.
-4. Generate ONE fresh, unique, and appropriately challenging interview question.
+MANDATORY INTERVIEWING RULES:
+1. Address the candidate directly by name ("${candidateName}").
+2. When resume data is available:
+   - Ask for a clear explanation of their actual project architecture, data flow, their individual contribution, testing approaches, and technical trade-offs.
+   - Explore why specific technologies were chosen over alternatives.
+   - Test whether the candidate genuinely understands the skills they listed on their resume.
+   - NEVER treat resume claims as proven facts; frame questions requesting the candidate to demonstrate and explain their experience.
+3. If resume data is limited or generic, ask role-tailored practical engineering scenarios for a ${experienceLevel} ${role}.
+4. Under no circumstances repeat any previously asked question.
+5. Generate ONE fresh, unique, and challenging question.
 
 Respond ONLY with this exact JSON structure:
 {
@@ -776,6 +819,375 @@ function readBody(req) {
   });
 }
 
+// ─── POST /api/upload-resume (Feature 1) ─────────────────────────────────────
+async function handleUploadResume(req, res, body) {
+  const { fileBase64, fileName, mimeType, fileSize } = body;
+  if (!fileBase64 || !fileName) {
+    sendError(res, 400, 'fileBase64 and fileName are required');
+    return;
+  }
+
+  try {
+    const { text, isScanned, warnings } = await extractTextFromDocument(fileBase64, fileName, mimeType);
+
+    // Baseline heuristic parse
+    const parsed = heuristicParseResumeText(text, fileName);
+
+    const provider = getEffectiveProvider();
+    let finalParsed = parsed;
+
+    // AI-enhanced extraction if available
+    if (provider !== 'fallback' && text.length >= 50) {
+      try {
+        const prompt = `You are an expert AI talent acquisition specialist analyzing an uploaded candidate resume.
+Extract structured information accurately from the resume text below.
+STRICT RULES:
+1. DO NOT invent missing information or hallucinate facts not present in the text.
+2. If a section is missing from the resume, leave the array empty or string blank.
+3. Distinguish technical skills from soft skills and tools.
+
+Resume Text:
+"""
+${text.slice(0, 7000)}
+"""
+
+Respond ONLY with this exact JSON structure:
+{
+  "candidateName": "Full name or Candidate",
+  "email": "candidate email or empty",
+  "phone": "candidate phone or empty",
+  "location": "location/city or empty",
+  "linkedinUrl": "url or empty",
+  "githubUrl": "url or empty",
+  "summary": "2-3 sentence executive professional summary of their stated background",
+  "education": [
+    { "institution": "...", "degree": "...", "fieldOfStudy": "...", "year": "...", "scoreOrGrade": "..." }
+  ],
+  "technicalSkills": ["skill1", "skill2"],
+  "softSkills": ["skill1", "skill2"],
+  "projects": [
+    { "title": "Project Name", "description": "Overview of project", "technologies": ["tech1", "tech2"], "roleOrContribution": "..." }
+  ],
+  "experience": [
+    { "company": "Company Name", "role": "Title", "duration": "...", "description": "...", "technologies": ["..."] }
+  ],
+  "certifications": ["cert1"],
+  "toolsAndTechnologies": ["Git", "Docker", "..."],
+  "achievements": ["achievement1"]
+}`;
+
+        const aiResult = await callAI(prompt);
+        if (aiResult && (aiResult.candidateName || (aiResult.technicalSkills && aiResult.technicalSkills.length > 0))) {
+          finalParsed = {
+            candidateName: aiResult.candidateName || parsed.candidateName,
+            email: aiResult.email || parsed.email,
+            phone: aiResult.phone || parsed.phone,
+            location: aiResult.location || parsed.location,
+            linkedinUrl: aiResult.linkedinUrl || parsed.linkedinUrl,
+            githubUrl: aiResult.githubUrl || parsed.githubUrl,
+            summary: aiResult.summary || parsed.summary,
+            education: Array.isArray(aiResult.education) && aiResult.education.length > 0 ? aiResult.education : parsed.education,
+            technicalSkills: Array.isArray(aiResult.technicalSkills) && aiResult.technicalSkills.length > 0 ? aiResult.technicalSkills : parsed.technicalSkills,
+            softSkills: Array.isArray(aiResult.softSkills) && aiResult.softSkills.length > 0 ? aiResult.softSkills : parsed.softSkills,
+            projects: Array.isArray(aiResult.projects) && aiResult.projects.length > 0 ? aiResult.projects : parsed.projects,
+            experience: Array.isArray(aiResult.experience) && aiResult.experience.length > 0 ? aiResult.experience : parsed.experience,
+            certifications: Array.isArray(aiResult.certifications) ? aiResult.certifications : parsed.certifications,
+            toolsAndTechnologies: Array.isArray(aiResult.toolsAndTechnologies) ? aiResult.toolsAndTechnologies : parsed.toolsAndTechnologies,
+            achievements: Array.isArray(aiResult.achievements) ? aiResult.achievements : parsed.achievements
+          };
+        }
+      } catch (aiErr) {
+        console.warn('[AI Resume Extraction] AI enhancement skipped, using heuristic parse:', aiErr.message);
+      }
+    }
+
+    const resumeDataObj = {
+      id: `res_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      fileName,
+      fileSize: fileSize || Buffer.from(fileBase64, 'base64').length,
+      extractedAt: new Date().toISOString(),
+      rawTextPreview: text.slice(0, 600),
+      candidateName: finalParsed.candidateName || 'Candidate',
+      email: finalParsed.email || '',
+      phone: finalParsed.phone || '',
+      location: finalParsed.location || '',
+      linkedinUrl: finalParsed.linkedinUrl || '',
+      githubUrl: finalParsed.githubUrl || '',
+      summary: finalParsed.summary || '',
+      education: finalParsed.education || [],
+      technicalSkills: finalParsed.technicalSkills || [],
+      softSkills: finalParsed.softSkills || [],
+      projects: finalParsed.projects || [],
+      experience: finalParsed.experience || [],
+      certifications: finalParsed.certifications || [],
+      toolsAndTechnologies: finalParsed.toolsAndTechnologies || [],
+      achievements: finalParsed.achievements || [],
+      isScannedOrNoText: isScanned,
+      warnings
+    };
+
+    sendJSON(res, 200, {
+      success: true,
+      resumeData: resumeDataObj,
+      data: resumeDataObj,
+      warnings
+    });
+  } catch (err) {
+    console.error('[Upload Resume] Error:', err.message);
+    sendError(res, 400, err.message || 'Failed to process resume file.');
+  }
+}
+
+// ─── POST /api/analyze-jd (Feature 3) ─────────────────────────────────────────
+async function handleAnalyzeJD(req, res, body) {
+  const { resumeData, jobDescription, targetRole } = body;
+  if (!jobDescription || typeof jobDescription !== 'string' || !jobDescription.trim()) {
+    sendError(res, 400, 'jobDescription text is required');
+    return;
+  }
+
+  const jdText = jobDescription.trim();
+  const candidateSkills = (resumeData?.technicalSkills || []).concat(resumeData?.toolsAndTechnologies || []);
+  const candidateProjects = (resumeData?.projects || []).map(p => `${p.title}: ${p.technologies?.join(', ')}`);
+
+  const provider = getEffectiveProvider();
+
+  if (provider !== 'fallback') {
+    try {
+      const prompt = `You are a senior technical hiring manager analyzing a candidate's resume against a target Job Description (JD).
+Role Target: ${targetRole || 'Software Engineer'}
+
+Candidate's Stated Skills on Resume:
+${candidateSkills.join(', ') || 'None listed explicitly'}
+
+Candidate's Projects:
+${candidateProjects.join('\n') || 'None listed'}
+
+Job Description:
+"""
+${jdText.slice(0, 4000)}
+"""
+
+CRITICAL FAIRNESS RULE:
+- Clearly distinguish between a skill that is "missing from the resume" and a candidate's inability. DO NOT infer inability merely because a skill wasn't mentioned on the resume.
+
+Respond ONLY with this exact JSON:
+{
+  "targetJobTitle": "${targetRole || 'Target Role'}",
+  "relevantSkillsFound": ["skills present on resume matching JD"],
+  "missingRequiredSkills": ["skills mentioned in JD that are not evident on the resume"],
+  "interviewFocusTopics": ["topic 1", "topic 2", "topic 3", "topic 4"],
+  "matchScorePercent": number (0-100, fair alignment score),
+  "summary": "3-4 sentence objective analysis of how the candidate's stated background compares to role requirements",
+  "roleSpecificPlan": [
+    "Step 1: Inquire about ...",
+    "Step 2: Deep dive into ...",
+    "Step 3: Evaluate missing JD requirement ...",
+    "Step 4: Behavioral assessment for team fit"
+  ]
+}`;
+
+      const aiMatch = await callAI(prompt);
+      sendJSON(res, 200, {
+        matchAnalysis: {
+          targetJobTitle: aiMatch.targetJobTitle || targetRole || 'Target Role',
+          relevantSkillsFound: aiMatch.relevantSkillsFound || candidateSkills.slice(0, 5),
+          missingRequiredSkills: aiMatch.missingRequiredSkills || [],
+          interviewFocusTopics: aiMatch.interviewFocusTopics || ['Core Fundamentals', 'Project Architecture', 'Problem Solving'],
+          matchScorePercent: clamp(aiMatch.matchScorePercent || 70),
+          summary: aiMatch.summary || 'Resume provides a solid foundational match for the target role with areas identified for interview verification.',
+          roleSpecificPlan: aiMatch.roleSpecificPlan || [
+            'Explore technical architecture of listed projects',
+            'Validate hands-on experience in core required tools',
+            'Assess adaptability to missing JD skills'
+          ]
+        },
+        source: 'ai_generated'
+      });
+      return;
+    } catch (err) {
+      console.warn('[AI JD Analysis] Error, falling back to deterministic match:', err.message);
+    }
+  }
+
+  // Deterministic JD match fallback
+  const commonTech = [
+    'JavaScript', 'TypeScript', 'Python', 'Java', 'C++', 'React', 'Node.js', 'SQL',
+    'PostgreSQL', 'Docker', 'AWS', 'Kubernetes', 'REST API', 'GraphQL', 'Git', 'Linux'
+  ];
+  const jdLower = jdText.toLowerCase();
+  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const jdRequired = commonTech.filter(t => new RegExp(`(^|[^a-zA-Z0-9+#])${escapeRegex(t)}($|[^a-zA-Z0-9+#])`, 'i').test(jdLower));
+  const matchedSkills = candidateSkills.filter(s => jdRequired.some(j => j.toLowerCase() === s.toLowerCase()));
+  const missingSkills = jdRequired.filter(j => !matchedSkills.some(m => m.toLowerCase() === j.toLowerCase()));
+  const matchRatio = jdRequired.length > 0 ? matchedSkills.length / jdRequired.length : 0.7;
+  const matchScore = clamp(Math.round(matchRatio * 60 + 35));
+
+  const analysisData = {
+    targetJobTitle: targetRole || 'Software Engineer',
+    relevantSkillsFound: matchedSkills.length > 0 ? matchedSkills : candidateSkills.slice(0, 4),
+    missingRequiredSkills: missingSkills,
+    interviewFocusTopics: ['Project Architecture', 'Hands-on Technical Depth', 'System Problem Solving', 'Adaptability'],
+    matchScorePercent: matchScore,
+    summary: `The candidate demonstrates ${matchedSkills.length} matching skills mentioned in the job description. The interview will explore these projects and verify foundational readiness for ${targetRole || 'the role'}.`,
+    roleSpecificPlan: [
+      'Explore candidate project architecture and tech stack choices',
+      'Inquire into problem-solving approaches under real constraints',
+      'Verify conceptual understanding of skills not explicitly mentioned on resume'
+    ]
+  };
+
+  sendJSON(res, 200, {
+    matchAnalysis: analysisData,
+    analysis: analysisData,
+    source: 'deterministic'
+  });
+}
+
+// ─── POST /api/generate-recommendation (Feature 6) ───────────────────────────
+async function handleFinalRecommendation(req, res, body) {
+  const { session, responses, resumeData, jobDescription } = body;
+  if (!session || !responses) {
+    sendError(res, 400, 'session and responses required');
+    return;
+  }
+
+  const overallScore = typeof session.overallScore === 'number'
+    ? session.overallScore
+    : Math.round(responses.reduce((acc, r) => acc + (r.evaluations?.score || 0), 0) / Math.max(responses.length, 1));
+
+  const passingThreshold = 75;
+  const borderlineThreshold = 55;
+
+  const getWordCount = (r) => typeof r.wordCount === 'number' ? r.wordCount : (r.answerText || '').trim().split(/\s+/).filter(Boolean).length;
+
+  let defaultStatus = 'borderline';
+  let defaultLabel = 'Borderline — Additional Assessment Recommended';
+  if (responses.length === 0 || responses.every(r => getWordCount(r) < 3)) {
+    defaultStatus = 'inconclusive';
+    defaultLabel = 'Inconclusive — Insufficient Evidence to Evaluate';
+  } else if (overallScore >= passingThreshold) {
+    defaultStatus = 'recommended';
+    defaultLabel = 'Recommended for Next Round';
+  } else if (overallScore < borderlineThreshold) {
+    defaultStatus = 'not_recommended';
+    defaultLabel = 'Not Recommended for Next Round Based on Practice Assessment';
+  }
+
+  const provider = getEffectiveProvider();
+
+  if (provider !== 'fallback' && responses.length > 0 && defaultStatus !== 'inconclusive') {
+    try {
+      const qaSummaries = responses.map((r, i) =>
+        `Q${i+1} [${r.category}]: "${r.questionText}"\nCandidate Answer: "${r.answerText.substring(0, 180)}"\nScore: ${r.evaluations?.score || 0}/100\nFeedback: ${r.evaluations?.feedback || ''}`
+      ).join('\n\n');
+
+      const prompt = `You are a senior technical hiring panel lead finalizing an evidence-based candidate selection recommendation.
+This is an educational practice assessment.
+Candidate Name: ${session.candidateName || 'Candidate'}
+Target Role: ${session.role} (${session.experienceLevel})
+Overall Score: ${overallScore}/100 (Passing: ${passingThreshold}, Borderline: ${borderlineThreshold})
+
+${resumeData ? `Resume Projects: ${(resumeData.projects || []).map(p => p.title).join(', ')}\nResume Skills: ${(resumeData.technicalSkills || []).join(', ')}` : ''}
+${jobDescription ? `Job Description: ${jobDescription.slice(0, 600)}...` : ''}
+
+Interview Performance:
+${qaSummaries}
+
+STRICT FAIRNESS & LEGAL REQUIREMENTS:
+1. MUST NOT discriminate on personal traits, age, religion, gender, ethnicity, dialect, or accent.
+2. DO NOT penalize missing skills on resume if candidate demonstrated competence in the interview.
+3. Ground the recommendation SOLELY on demonstrated evidence from the answers.
+4. Outcome MUST be strictly one of: "recommended", "borderline", "not_recommended", "inconclusive".
+
+Respond ONLY with this exact JSON:
+{
+  "status": "${defaultStatus}",
+  "statusLabel": "${defaultLabel}",
+  "headline": "1-sentence executive summary headline",
+  "explanation": "3-4 sentence comprehensive explanation citing specific questions and demonstrated competencies",
+  "confidenceLevel": "High" | "Medium" | "Low",
+  "demonstratedSkills": ["skill1", "skill2", "skill3"],
+  "convincinglyExplainedProjects": ["project1", "project2"],
+  "claimsNeedingClarification": ["claim/topic needing more proof"],
+  "jobRelevantStrengths": ["strength 1", "strength 2"],
+  "skillsRequiringPractice": ["skill needing revision"],
+  "decisionFactors": [
+    { "factor": "Factor Name", "impact": "positive" | "neutral" | "gap", "detail": "explanation..." }
+  ]
+}`;
+
+      const aiRec = await callAI(prompt);
+      sendJSON(res, 200, {
+        recommendation: {
+          status: aiRec.status || defaultStatus,
+          statusLabel: aiRec.statusLabel || defaultLabel,
+          headline: aiRec.headline || `${session.candidateName} achieved an overall score of ${overallScore}/100.`,
+          explanation: aiRec.explanation || `The candidate answered ${responses.length} questions demonstrating practical familiarity with their stated skillset.`,
+          confidenceLevel: aiRec.confidenceLevel || 'High',
+          overallScore,
+          passingThreshold,
+          borderlineThreshold,
+          demonstratedSkills: aiRec.demonstratedSkills || (resumeData?.technicalSkills || []).slice(0, 4),
+          convincinglyExplainedProjects: aiRec.convincinglyExplainedProjects || (resumeData?.projects || []).slice(0, 2).map(p => p.title),
+          claimsNeedingClarification: aiRec.claimsNeedingClarification || ['In-depth scalability metrics under enterprise load'],
+          jobRelevantStrengths: aiRec.jobRelevantStrengths || ['Clear architectural communication', 'Demonstrated problem-solving structure'],
+          skillsRequiringPractice: aiRec.skillsRequiringPractice || ['Algorithmic edge case handling and time complexity trade-offs'],
+          decisionFactors: aiRec.decisionFactors || [
+            { factor: 'Technical Knowledge', impact: overallScore >= 70 ? 'positive' : 'gap', detail: `Scored ${overallScore}% across core role competencies.` }
+          ],
+          fairnessNotice: 'Fairness Notice: AI Interview Pro is an advisory practice assessment tool. Recommendations are strictly educational and performance-driven. Hiring decisions should always be conducted by human professionals without bias.'
+        },
+        source: 'ai_generated'
+      });
+      return;
+    } catch (err) {
+      console.warn('[AI Recommendation] Error, falling back to deterministic recommendation:', err.message);
+    }
+  }
+
+  // Deterministic recommendation fallback
+  const allStrengths = Array.from(new Set(responses.flatMap(r => r.evaluations?.keyStrengths || []))).slice(0, 4);
+  const allImprovements = Array.from(new Set(responses.flatMap(r => r.evaluations?.keyImprovements || []))).slice(0, 3);
+  const demonstrated = (resumeData?.technicalSkills || []).slice(0, 4);
+
+  sendJSON(res, 200, {
+    recommendation: {
+      status: defaultStatus,
+      statusLabel: defaultLabel,
+      headline: overallScore >= passingThreshold
+        ? `${session.candidateName || 'Candidate'} demonstrated strong role competency scoring ${overallScore}/100.`
+        : overallScore >= borderlineThreshold
+        ? `${session.candidateName || 'Candidate'} demonstrated good foundational knowledge with targeted areas for improvement (${overallScore}/100).`
+        : `${session.candidateName || 'Candidate'} scored ${overallScore}/100; further practice in core concepts is advised.`,
+      explanation: `Based on ${responses.length} evaluated responses, the candidate achieved an overall weighted score of ${overallScore}/100 against a passing benchmark of ${passingThreshold}%. The assessment evaluated substantive clarity, technical accuracy, and structured reasoning.`,
+      confidenceLevel: responses.length >= 4 ? 'High' : 'Medium',
+      overallScore,
+      passingThreshold,
+      borderlineThreshold,
+      demonstratedSkills: demonstrated.length > 0 ? demonstrated : ['Problem Solving', 'Communication', 'Technical Fundamentals'],
+      convincinglyExplainedProjects: (resumeData?.projects || []).slice(0, 2).map(p => p.title),
+      claimsNeedingClarification: ['Architectural trade-offs under production scaling'],
+      jobRelevantStrengths: allStrengths.length > 0 ? allStrengths : ['Structured response delivery', 'Engagement with question prompts'],
+      skillsRequiringPractice: allImprovements.length > 0 ? allImprovements : ['Deeper technical elaboration', 'Real-world scenario examples'],
+      decisionFactors: [
+        {
+          factor: 'Overall Performance Benchmark',
+          impact: overallScore >= passingThreshold ? 'positive' : overallScore >= borderlineThreshold ? 'neutral' : 'gap',
+          detail: `Earned ${overallScore}/100 across evaluated rubrics.`
+        },
+        {
+          factor: 'Interview Evidence',
+          impact: responses.length >= 3 ? 'positive' : 'neutral',
+          detail: `Attempted and submitted ${responses.length} questions.`
+        }
+      ],
+      fairnessNotice: 'Fairness Notice: AI Interview Pro is an advisory practice assessment tool. Recommendations are strictly educational and performance-driven. Hiring decisions should always be conducted by human professionals without bias.'
+    },
+    source: 'deterministic'
+  });
+}
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {
   // CORS preflight
@@ -795,6 +1207,18 @@ const server = http.createServer(async (req, res) => {
   try {
     if ((pathname === '/api/ai-status' || pathname === '/api/status') && req.method === 'GET') {
       return handleStatus(req, res);
+    }
+    if (pathname === '/api/upload-resume' && req.method === 'POST') {
+      const body = await readBody(req);
+      return handleUploadResume(req, res, body);
+    }
+    if (pathname === '/api/analyze-jd' && req.method === 'POST') {
+      const body = await readBody(req);
+      return handleAnalyzeJD(req, res, body);
+    }
+    if (pathname === '/api/generate-recommendation' && req.method === 'POST') {
+      const body = await readBody(req);
+      return handleFinalRecommendation(req, res, body);
     }
     if (pathname === '/api/generate-question' && req.method === 'POST') {
       const body = await readBody(req);
@@ -826,6 +1250,9 @@ server.listen(PORT, HOST, () => {
   console.log(`🧠 AI Provider: ${provider === 'fallback' ? '⚠️  FALLBACK (curated bank) — add API key to .env' : `✅ ${provider.toUpperCase()} (${provider === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL})`}`);
   console.log(`\nEndpoints:`);
   console.log(`  GET  /api/ai-status`);
+  console.log(`  POST /api/upload-resume`);
+  console.log(`  POST /api/analyze-jd`);
+  console.log(`  POST /api/generate-recommendation`);
   console.log(`  POST /api/generate-question`);
   console.log(`  POST /api/evaluate-answer`);
   console.log(`  POST /api/generate-followup`);

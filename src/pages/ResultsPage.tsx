@@ -24,7 +24,10 @@ import {
   Clock,
   Globe2,
   Briefcase,
-  User
+  User,
+  ShieldCheck,
+  AlertTriangle,
+  Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { storageService } from '../services/storage';
@@ -34,6 +37,7 @@ import { StatRing } from '../components/common/StatRing';
 import { getLanguageConfig } from '../config/languages';
 import { CATEGORY_CRITERIA_DOCS } from '../services/aiEvaluator';
 import { useToast } from '../context/ToastContext';
+import { pdfExportService } from '../services/pdfExportService';
 
 interface ResultsPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -93,7 +97,23 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ onNavigate, sessionId 
   };
 
   const handlePrintDownload = () => {
-    window.print();
+    if (!session) return;
+    try {
+      pdfExportService.generateInterviewReport(session);
+      toastSuccess('PDF Downloaded!', 'Candidate evaluation and recommendation report generated.');
+    } catch (err: any) {
+      console.warn('PDF export fallback:', err);
+      window.print();
+    }
+  };
+
+  const handleDeleteSession = () => {
+    if (!session) return;
+    if (window.confirm('Delete this interview session and all associated data permanently?')) {
+      storageService.deleteSession(session.id);
+      toastSuccess('Session Deleted', 'Interview record and data removed.');
+      onNavigate('dashboard');
+    }
   };
 
   const handleExportJSON = () => {
@@ -137,6 +157,8 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ onNavigate, sessionId 
   const score = session.overallScore ?? 0;
   const summary = session.feedbackSummary;
   const langConfig = getLanguageConfig(session.language);
+  const rec = session.finalRecommendation;
+  const recStatus = rec?.status || (score >= 70 ? 'recommended' : score >= 50 ? 'borderline' : 'not_recommended');
 
   // Compute duration
   const startTime = new Date(session.createdAt).getTime();
@@ -213,6 +235,15 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ onNavigate, sessionId 
           >
             <Briefcase className="w-3.5 h-3.5" />
             <span>View Analytics</span>
+          </button>
+
+          <button
+            onClick={handleDeleteSession}
+            className="px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/30 flex items-center gap-1.5 transition-all"
+            title="Permanently delete this interview session and data"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>Delete Session</span>
           </button>
         </div>
       </div>
@@ -339,6 +370,156 @@ export const ResultsPage: React.FC<ResultsPageProps> = ({ onNavigate, sessionId 
 
         </div>
 
+      </div>
+
+      {/* FEATURE 6: FINAL CANDIDATE EVALUATION & SELECTION RECOMMENDATION */}
+      <div className="glass-card rounded-3xl p-6 sm:p-8 border border-slate-700/80 bg-gradient-to-br from-slate-900/95 via-navy-900/90 to-slate-950 space-y-6 shadow-2xl print:bg-white print:border-slate-300 print:text-black">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 print:border-slate-400">
+              <Award className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 block print:text-slate-600">
+                Evaluation & Selection Engine
+              </span>
+              <h2 className="text-xl font-extrabold text-white print:text-black">
+                Final Selection Recommendation & Hiring Advisory
+              </h2>
+            </div>
+          </div>
+
+          {/* Configurable Thresholds info */}
+          <div className="flex items-center gap-3 text-xs bg-slate-950/80 px-3.5 py-1.5 rounded-xl border border-slate-800 print:bg-slate-100 print:border-slate-300">
+            <span className="text-slate-400 print:text-slate-700">Benchmark Criteria:</span>
+            <span className="text-emerald-400 font-mono font-bold print:text-emerald-800">Pass ≥ {rec?.passingThreshold || 70}%</span>
+            <span className="text-slate-600">•</span>
+            <span className="text-amber-400 font-mono font-bold print:text-amber-800">Borderline ≥ {rec?.borderlineThreshold || 50}%</span>
+          </div>
+        </div>
+
+        {/* Outcome Badge & Executive Headline */}
+        <div className={`p-5 rounded-2xl border ${
+          recStatus === 'recommended'
+            ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-300 print:bg-emerald-50 print:border-emerald-300'
+            : recStatus === 'borderline'
+            ? 'bg-amber-950/40 border-amber-500/50 text-amber-300 print:bg-amber-50 print:border-amber-300'
+            : recStatus === 'not_recommended'
+            ? 'bg-rose-950/40 border-rose-500/50 text-rose-300 print:bg-rose-50 print:border-rose-300'
+            : 'bg-slate-900/60 border-slate-700 text-slate-300 print:bg-slate-50'
+        } space-y-2`}>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className={`text-xs font-extrabold uppercase tracking-wider px-3.5 py-1.5 rounded-full border shadow-sm ${
+              recStatus === 'recommended'
+                ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
+                : recStatus === 'borderline'
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
+                : recStatus === 'not_recommended'
+                ? 'bg-rose-500 text-white border-rose-400 font-bold'
+                : 'bg-slate-700 text-white border-slate-600 font-bold'
+            }`}>
+              {rec?.statusLabel || (
+                recStatus === 'recommended' ? 'Recommended for Next Round' :
+                recStatus === 'borderline' ? 'Borderline — Additional Assessment Recommended' :
+                recStatus === 'not_recommended' ? 'Not Recommended at This Time' : 'Inconclusive Assessment'
+              )}
+            </span>
+            <span className="text-xs font-semibold opacity-80 print:text-slate-700">
+              Assessment Confidence: <strong>{rec?.confidenceLevel || 'High'}</strong>
+            </span>
+          </div>
+
+          <h3 className="text-base sm:text-lg font-bold text-white pt-1 print:text-black">
+            {rec?.headline || `${session.candidateName || 'Candidate'} scored ${score}/100 across the ${session.role} assessment.`}
+          </h3>
+          <p className="text-xs sm:text-sm text-slate-300 leading-relaxed print:text-slate-800">
+            {rec?.explanation || 'Evaluation grounded strictly on substantive demonstrable evidence provided during this session.'}
+          </p>
+        </div>
+
+        {/* Evidence-Based Decision Factors */}
+        {rec?.decisionFactors && rec.decisionFactors.length > 0 && (
+          <div className="space-y-2.5">
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block print:text-slate-700">
+              Evidence-Based Decision Factors
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {rec.decisionFactors.map((df, dfIdx) => (
+                <div key={dfIdx} className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 flex items-start gap-2.5 print:bg-slate-100 print:border-slate-300">
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase shrink-0 mt-0.5 ${
+                    df.impact === 'positive' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800 print:bg-emerald-200 print:text-emerald-900' :
+                    df.impact === 'gap' ? 'bg-rose-950 text-rose-400 border border-rose-800 print:bg-rose-200 print:text-rose-900' :
+                    'bg-slate-800 text-slate-300 print:bg-slate-200 print:text-slate-900'
+                  }`}>
+                    {df.impact}
+                  </span>
+                  <div>
+                    <h4 className="text-xs font-bold text-white print:text-black">{df.factor}</h4>
+                    <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed print:text-slate-700">{df.detail}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Section C: Resume-Based Findings & Alignment */}
+        {(session.resumeData || rec?.demonstratedSkills?.length || rec?.convincinglyExplainedProjects?.length) && (
+          <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/70 border border-slate-800 space-y-3.5 print:bg-slate-100 print:border-slate-300">
+            <div className="flex items-center gap-2">
+              <FileText className="w-4 h-4 text-cyan-400 print:text-cyan-800" />
+              <h3 className="text-xs font-bold text-white uppercase tracking-wider print:text-black">
+                Resume-Based Findings & Demonstrations (Feature 2 & 6)
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1.5 print:bg-white print:border-slate-200">
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block print:text-emerald-800">
+                  ✓ Demonstrated Skills
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {(rec?.demonstratedSkills || session.resumeData?.technicalSkills || ['Core Fundamentals']).slice(0, 5).map(s => (
+                    <span key={s} className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 font-mono print:bg-emerald-100 print:text-emerald-900">
+                      {s}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1.5 print:bg-white print:border-slate-200">
+                <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-wider block print:text-cyan-800">
+                  ★ Explained Projects
+                </span>
+                <div className="text-xs text-slate-300 space-y-1 print:text-slate-800">
+                  {(rec?.convincinglyExplainedProjects || (session.resumeData?.projects || []).map(p => p.title)).slice(0, 3).map((p, pIdx) => (
+                    <div key={pIdx} className="truncate">• {p}</div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 space-y-1.5 print:bg-white print:border-slate-200">
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block print:text-amber-800">
+                  ▲ Clarification Topics
+                </span>
+                <div className="text-xs text-slate-400 space-y-1 print:text-slate-700">
+                  {(rec?.claimsNeedingClarification || ['Production scale trade-offs and edge-case testing']).slice(0, 2).map((c, cIdx) => (
+                    <div key={cIdx} className="truncate">• {c}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Strict Fairness & Legal Requirements Notice */}
+        <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] text-slate-400 flex items-start gap-2.5 print:bg-slate-50 print:border-slate-300 print:text-slate-700">
+          <ShieldCheck className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5 print:text-cyan-800" />
+          <div className="space-y-0.5 leading-relaxed">
+            <span className="font-semibold text-slate-300 print:text-slate-900">Fairness & Non-Discrimination Notice: </span>
+            {rec?.fairnessNotice || 'This assessment is advisory practice. Decisions must never be based on age, gender, religion, ethnicity, or dialect. Evaluates purely on demonstrable, job-relevant skills.'}
+          </div>
+        </div>
       </div>
 
       {/* Documented Scoring Weights Breakdown Card */}

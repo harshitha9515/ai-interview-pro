@@ -16,12 +16,15 @@ import {
   Compass,
   MessageSquare,
   Sparkles,
-  ArrowUpDown
+  ArrowUpDown,
+  Download,
+  FileText
 } from 'lucide-react';
 import { storageService } from '../services/storage';
 import { InterviewSession, InterviewType } from '../types/interview';
 import { getLanguageConfig } from '../config/languages';
 import { StatRing } from '../components/common/StatRing';
+import { pdfExportService } from '../services/pdfExportService';
 
 interface HistoryPageProps {
   onNavigate: (page: string, params?: any) => void;
@@ -356,6 +359,24 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onNavigate }) => {
                         {session.feedbackSummary.readinessStatus}
                       </span>
                     )}
+                    {session.resumeData && (
+                      <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/40 flex items-center gap-1">
+                        <FileText className="w-2.5 h-2.5" />
+                        <span>Resume</span>
+                      </span>
+                    )}
+                    {session.finalRecommendation && (
+                      <span className={`text-[10px] px-2 py-0.5 rounded font-extrabold uppercase tracking-wider border ${
+                        session.finalRecommendation.status === 'recommended'
+                          ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500/50'
+                          : session.finalRecommendation.status === 'borderline'
+                          ? 'bg-amber-950/80 text-amber-300 border-amber-500/50'
+                          : 'bg-rose-950/80 text-rose-300 border-rose-500/50'
+                      }`}>
+                        {session.finalRecommendation.status === 'recommended' ? '✓ Recommended' :
+                         session.finalRecommendation.status === 'borderline' ? '▲ Borderline' : '✕ Needs Practice'}
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
@@ -399,6 +420,20 @@ export const HistoryPage: React.FC<HistoryPageProps> = ({ onNavigate }) => {
                   )}
 
                   <div className="flex items-center gap-2">
+                    {isCompleted && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          pdfExportService.generateInterviewReport(session);
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 text-cyan-300 text-xs font-semibold flex items-center gap-1 transition-colors border border-cyan-800/40"
+                        title="Download PDF Assessment Report"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>PDF</span>
+                      </button>
+                    )}
+
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
