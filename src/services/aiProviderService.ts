@@ -23,6 +23,7 @@ import {
 import { getMultilingualQuestions } from '../data/multilingualQuestionBank';
 import { aiEvaluatorService } from './aiEvaluator';
 import { roleQuestionEngine, createQuestionSignature } from './roleQuestionEngine';
+import { parseResumeDocumentClient } from './clientResumeParser';
 
 /**
  * Resolves the backend endpoint URL.
@@ -405,6 +406,7 @@ class AIProviderService {
 
   // Upload and parse resume
   async uploadResume(params: UploadResumeParams): Promise<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }> {
+    // 1. Try server API first if available
     try {
       const resp = await apiFetch<{ resumeData: ExtractedResumeData; warnings?: string[]; source: string }>('/upload-resume', {
         method: 'POST',
@@ -418,30 +420,37 @@ class AIProviderService {
           source: resp.source || 'server'
         };
       }
-      throw new Error('Invalid resume parsing response from server.');
-    } catch (err: any) {
-      console.warn('[AIProviderService] uploadResume server error:', err.message);
-      // If server returned an HTTP error (e.g. 400 Bad Request, file format, size), surface that exact message
-      if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('NetworkError') && !err.message.includes('503')) {
-        throw err;
-      }
-      this.serverAvailable = false;
-      throw new Error('AI backend server is not reachable to parse this resume document. Please start the server using npm run server.');
+    } catch (serverErr: any) {
+      console.warn('[AIProviderService] Server uploadResume unavailable (' + serverErr.message + '). Using in-browser client parser fallback.');
     }
+
+    // 2. Client-side in-browser fallback parser (seamlessly parses PDF, DOCX, TXT without server)
+    try {
+      const clientResult = await parseResumeDocumentClient(params);
+      if (clientResult?.resumeData) {
+        return clientResult;
+      }
+    } catch (clientErr: any) {
+      console.error('[AIProviderService] Client resume parsing error:', clientErr);
+      throw new Error(`Unable to extract text from resume: ${clientErr.message || 'Ensure document is not password-protected or corrupted.'}`);
+    }
+
+    throw new Error('Could not parse resume document. Please ensure the file is a readable PDF (.pdf), Word (.docx), or text (.txt) file.');
   }
 
   // Analyze Job Description against Resume
   async analyzeJobDescription(params: AnalyzeJDParams): Promise<{ analysis: JobMatchAnalysis; source: string }> {
     if (this.serverAvailable !== false) {
       try {
-        const resp = await apiFetch<{ analysis: JobMatchAnalysis; source: string }>('/analyze-jd', {
+        const resp = await apiFetch<{ analysis?: JobMatchAnalysis; matchAnalysis?: JobMatchAnalysis; source?: string }>('/analyze-jd', {
           method: 'POST',
           body: JSON.stringify(params)
         });
         this.serverAvailable = true;
-        if (resp.analysis) {
+        const analysisData = resp.analysis || resp.matchAnalysis;
+        if (analysisData) {
           return {
-            analysis: resp.analysis,
+            analysis: analysisData,
             source: resp.source || 'ai_generated'
           };
         }

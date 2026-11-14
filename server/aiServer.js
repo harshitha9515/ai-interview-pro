@@ -959,6 +959,11 @@ function sendError(res, status, message) {
 }
 
 function readBody(req) {
+  if (req.body) {
+    if (typeof req.body === 'object') return Promise.resolve(req.body);
+    try { return Promise.resolve(JSON.parse(req.body)); }
+    catch { return Promise.resolve({}); }
+  }
   return new Promise((resolve, reject) => {
     let body = '';
     req.on('data', chunk => { body += chunk; });
@@ -1339,8 +1344,8 @@ Respond ONLY with this exact JSON:
   });
 }
 
-// ─── Router ───────────────────────────────────────────────────────────────────
-const server = http.createServer(async (req, res) => {
+// ─── Request Handler (used by standalone server and Vercel serverless functions) ───
+export async function handleRequest(req, res) {
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -1352,38 +1357,39 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  const host = req.headers?.host || 'localhost';
+  const url = new URL(req.url, `http://${host}`);
   const pathname = url.pathname;
 
   try {
-    if ((pathname === '/api/ai-status' || pathname === '/api/status') && req.method === 'GET') {
+    if ((pathname === '/api/ai-status' || pathname === '/api/status' || pathname === '/ai-status' || pathname === '/status') && req.method === 'GET') {
       return handleStatus(req, res);
     }
-    if (pathname === '/api/upload-resume' && req.method === 'POST') {
+    if ((pathname === '/api/upload-resume' || pathname === '/upload-resume') && req.method === 'POST') {
       const body = await readBody(req);
       return handleUploadResume(req, res, body);
     }
-    if (pathname === '/api/analyze-jd' && req.method === 'POST') {
+    if ((pathname === '/api/analyze-jd' || pathname === '/analyze-jd') && req.method === 'POST') {
       const body = await readBody(req);
       return handleAnalyzeJD(req, res, body);
     }
-    if (pathname === '/api/generate-recommendation' && req.method === 'POST') {
+    if ((pathname === '/api/generate-recommendation' || pathname === '/generate-recommendation') && req.method === 'POST') {
       const body = await readBody(req);
       return handleFinalRecommendation(req, res, body);
     }
-    if (pathname === '/api/generate-question' && req.method === 'POST') {
+    if ((pathname === '/api/generate-question' || pathname === '/generate-question') && req.method === 'POST') {
       const body = await readBody(req);
       return handleGenerateQuestion(req, res, body);
     }
-    if (pathname === '/api/evaluate-answer' && req.method === 'POST') {
+    if ((pathname === '/api/evaluate-answer' || pathname === '/evaluate-answer') && req.method === 'POST') {
       const body = await readBody(req);
       return handleEvaluateAnswer(req, res, body);
     }
-    if (pathname === '/api/generate-followup' && req.method === 'POST') {
+    if ((pathname === '/api/generate-followup' || pathname === '/generate-followup') && req.method === 'POST') {
       const body = await readBody(req);
       return handleGenerateFollowup(req, res, body);
     }
-    if (pathname === '/api/generate-report' && req.method === 'POST') {
+    if ((pathname === '/api/generate-report' || pathname === '/generate-report') && req.method === 'POST') {
       const body = await readBody(req);
       return handleGenerateReport(req, res, body);
     }
@@ -1392,25 +1398,48 @@ const server = http.createServer(async (req, res) => {
     console.error('[Server] Unhandled error:', err);
     sendError(res, 500, 'Internal server error');
   }
-});
+}
 
-server.listen(PORT, () => {
-  const provider = getEffectiveProvider();
-  console.log(`\n🤖 AI Interview Pro — Backend AI Service`);
-  console.log(`📡 Running on port ${PORT} (dual-stack: http://127.0.0.1:${PORT} & http://localhost:${PORT})`);
-  console.log(`🧠 AI Provider: ${provider === 'fallback' ? '⚠️  FALLBACK (curated bank) — add API key to .env' : `✅ ${provider.toUpperCase()} (${provider === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL})`}`);
-  console.log(`\nEndpoints:`);
-  console.log(`  GET  /api/ai-status`);
-  console.log(`  POST /api/upload-resume`);
-  console.log(`  POST /api/analyze-jd`);
-  console.log(`  POST /api/generate-recommendation`);
-  console.log(`  POST /api/generate-question`);
-  console.log(`  POST /api/evaluate-answer`);
-  console.log(`  POST /api/generate-followup`);
-  console.log(`  POST /api/generate-report\n`);
-});
+// ─── Router & Standalone Server ───────────────────────────────────────────────
+const server = http.createServer(handleRequest);
 
-server.on('error', (err) => {
-  console.error('[Server] Error:', err.message);
-  process.exit(1);
-});
+const isMainScript = process.argv[1] && (
+  process.argv[1].endsWith('aiServer.js') || 
+  process.argv[1].endsWith('aiServer')
+);
+
+if (isMainScript) {
+  server.listen(PORT, () => {
+    const provider = getEffectiveProvider();
+    console.log(`\n🤖 AI Interview Pro — Backend AI Service`);
+    console.log(`📡 Running on port ${PORT} (dual-stack: http://127.0.0.1:${PORT} & http://localhost:${PORT})`);
+    console.log(`🧠 AI Provider: ${provider === 'fallback' ? '⚠️  FALLBACK (curated bank) — add API key to .env' : `✅ ${provider.toUpperCase()} (${provider === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL})`}`);
+    console.log(`\nEndpoints:`);
+    console.log(`  GET  /api/ai-status`);
+    console.log(`  POST /api/upload-resume`);
+    console.log(`  POST /api/analyze-jd`);
+    console.log(`  POST /api/generate-recommendation`);
+    console.log(`  POST /api/generate-question`);
+    console.log(`  POST /api/evaluate-answer`);
+    console.log(`  POST /api/generate-followup`);
+    console.log(`  POST /api/generate-report\n`);
+  });
+
+  server.on('error', (err) => {
+    console.error('[Server] Error:', err.message);
+    process.exit(1);
+  });
+}
+
+export {
+  handleStatus,
+  handleUploadResume,
+  handleAnalyzeJD,
+  handleFinalRecommendation,
+  handleGenerateQuestion,
+  handleEvaluateAnswer,
+  handleGenerateFollowup,
+  handleGenerateReport
+};
+
+export default handleRequest;

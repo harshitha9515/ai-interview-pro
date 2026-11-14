@@ -32,6 +32,7 @@ import {
   ResumeExperience
 } from '../../types/interview';
 import { aiProviderService } from '../../services/aiProviderService';
+import { SAMPLE_PROFILES } from '../../services/clientResumeParser';
 
 interface ResumeUploadAndAnalysisProps {
   resumeData: ExtractedResumeData | null;
@@ -160,6 +161,18 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
     onJobMatchChange(null);
     setUploadError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const loadSampleProfile = (key: 'ananya' | 'sneha' | 'vikram') => {
+    const profile = SAMPLE_PROFILES[key];
+    if (profile) {
+      setUploadError(null);
+      setSelectedFileName(profile.fileName);
+      onResumeChange(profile);
+      if (onCandidateNameExtracted) {
+        onCandidateNameExtracted(profile.candidateName);
+      }
+    }
   };
 
   // ─── Skill Tag Management ───────────────────────────────────────────────────
@@ -357,8 +370,42 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
                 className="px-6 py-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-2 mx-auto shadow-lg shadow-cyan-500/20 transition-all cursor-pointer"
               >
                 <Upload className="w-4 h-4" />
-                <span>Upload Your Resume (PDF)</span>
+                <span>Upload Your Resume (PDF, DOCX)</span>
               </button>
+            </div>
+
+            {/* Quick Sample Profile Selector for instant testing */}
+            <div className="pt-4 border-t border-slate-800/80 text-left" onClick={(e) => e.stopPropagation()}>
+              <p className="text-[11px] font-semibold text-slate-400 mb-2 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Or test instantly with a verified sample resume:</span>
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadSampleProfile('ananya')}
+                  className="p-2.5 rounded-xl bg-slate-950 hover:bg-cyan-950/60 border border-slate-800 hover:border-cyan-500/60 text-left transition-all group cursor-pointer"
+                >
+                  <div className="text-xs font-bold text-white group-hover:text-cyan-400">Ananya Rao</div>
+                  <div className="text-[10.5px] text-slate-400">Junior Full-Stack Dev</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => loadSampleProfile('sneha')}
+                  className="p-2.5 rounded-xl bg-slate-950 hover:bg-cyan-950/60 border border-slate-800 hover:border-cyan-500/60 text-left transition-all group cursor-pointer"
+                >
+                  <div className="text-xs font-bold text-white group-hover:text-cyan-400">Sneha Sharma</div>
+                  <div className="text-[10.5px] text-slate-400">ML / Data Scientist</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => loadSampleProfile('vikram')}
+                  className="p-2.5 rounded-xl bg-slate-950 hover:bg-cyan-950/60 border border-slate-800 hover:border-cyan-500/60 text-left transition-all group cursor-pointer"
+                >
+                  <div className="text-xs font-bold text-white group-hover:text-cyan-400">Vikram Patel</div>
+                  <div className="text-[10.5px] text-slate-400">Backend Java Engineer</div>
+                </button>
+              </div>
             </div>
 
             {selectedFileName && (
@@ -421,11 +468,16 @@ export const ResumeUploadAndAnalysis: React.FC<ResumeUploadAndAnalysisProps> = (
               <div className="flex items-center justify-between text-xs text-cyan-300 pb-2 border-b border-slate-800">
                 <span className="flex items-center gap-1.5 font-medium">
                   <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                  Uploaded Resume File: <strong className="text-white">{resumeData.fileName || selectedFileName || 'Custom Resume'}</strong>
+                  Resume File: <strong className="text-white">{resumeData.fileName || selectedFileName || 'Custom Resume'}</strong>
                 </span>
-                <span className="text-[11px] text-slate-400">
-                  {resumeData.technicalSkills?.length || 0} Skills • {resumeData.projects?.length || 0} Projects Extracted
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] px-2 py-0.5 rounded-md bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 font-mono">
+                    {resumeData.id?.includes('sample') ? 'Sample Profile' : 'Verified'}
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    {resumeData.technicalSkills?.length || 0} Skills • {resumeData.projects?.length || 0} Projects Extracted
+                  </span>
+                </div>
               </div>
               
               {/* Warnings check (e.g. Scanned / Low text) */}
